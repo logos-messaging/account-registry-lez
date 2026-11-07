@@ -1,0 +1,11 @@
+[package]
+name = "account-registry-program"
+description = "The registry's state transition: append to an account's signed log."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+account-log.workspace = true
+lee_core.workspace = true
+account-registry-core.workspace = true

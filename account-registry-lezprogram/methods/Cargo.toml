@@ -1,0 +1,20 @@
+[package]
+name = "account-registry-methods"
+description = "The registry program compiled for the zkVM: ACCOUNT_REGISTRY_ELF and ACCOUNT_REGISTRY_ID."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[package.metadata.risc0]
+methods = ["guest"]
+
+[build-dependencies]
+risc0-build.workspace = true
+
+[dev-dependencies]
+account-log.workspace = true
+borsh.workspace = true
+lee.workspace = true
+lee_core = { workspace = true, features = ["host"] }
+account-registry-core.workspace = true
+risc0-zkvm.workspace = true

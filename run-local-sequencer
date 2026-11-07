@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#
+# Runs a local LEZ sequencer at the exact revision this workspace pins.
+#
+# Needs no separate clone of the upstream repository. Cargo has already fetched it to satisfy
+# this workspace's git dependencies, so the sequencer is built from the same checkout the client
+# and the program were compiled against. That is the point: a LEZ program is bound to the
+# protocol revision it was built for, and a hand-cloned upstream is one `git checkout` away from
+# silently disagreeing with the pin in Cargo.toml.
+#
+# Usage: ./run-local-sequencer [extra sequencer args]
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+cargo_home=${CARGO_HOME:-$HOME/.cargo}
+
+# The pin in Cargo.toml is the single source of truth for which revision to run.
+rev=$(sed -n 's/.*logos-execution-zone", rev = "\([0-9a-f]\{7,\}\)".*/\1/p' \
+    "$repo_root/Cargo.toml" | head -1)
+
+if [[ -z $rev ]]; then
+    echo "run-local-sequencer: no logos-execution-zone rev found in Cargo.toml" >&2
+    exit 1
+fi
+
+# Cargo names a checkout by the revision's short hash, under a directory whose suffix hashes the
+# source URL — so both halves are discovered rather than hardcoded.
+find_checkout() {
+    find "$cargo_home/git/checkouts" -maxdepth 2 -type d -name "${rev:0:7}" \
+        -path '*logos-execution-zone*' 2>/dev/null | head -1
+}
+
+checkout=$(find_checkout)
+
+if [[ -z $checkout ]]; then
+    echo "Fetching the pinned upstream revision (${rev:0:7})..." >&2
+    (cd "$repo_root" && cargo fetch)
+    checkout=$(find_checkout)
+fi
+
+if [[ -z $checkout ]]; then
+    echo "run-local-sequencer: no checkout of ${rev:0:7} under $cargo_home/git/checkouts" >&2
+    echo "  \`cargo fetch\` in $repo_root should create one." >&2
+    exit 1
+fi
+
+service="$checkout/lez/sequencer/service"
+
+if [[ ! -d $service ]]; then
+    echo "run-local-sequencer: $service is missing — is the pin still a LEZ revision?" >&2
+    exit 1
+fi
+
+# Build artefacts go outside the checkout: cargo treats its cache as disposable and may prune
+# it, and a release target directory there would be both large and liable to vanish.
+export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$repo_root/target/sequencer}
+
+# `standalone` mocks the Bedrock node, so no Docker. RISC0_DEV_MODE skips proof verification,
+# which is what makes iteration bearable — never set it for anything you mean to trust.
+export RISC0_DEV_MODE=${RISC0_DEV_MODE:-1}
+export RUST_LOG=${RUST_LOG:-info}
+
+echo "Sequencer at ${rev:0:7}, binding :3040. Ctrl-C to stop." >&2
+
+# The config path is relative to the service directory, which is why this runs from there.
+cd "$service"
+exec cargo run --release --features standalone -p sequencer_service -- \
+    configs/debug/sequencer_config.json "$@"

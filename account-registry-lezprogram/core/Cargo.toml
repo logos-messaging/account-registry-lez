@@ -1,0 +1,10 @@
+[package]
+name = "account-registry-core"
+description = "The registry's wire types: the append instruction, and where an address's log lives."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+borsh.workspace = true
+lee_core.workspace = true

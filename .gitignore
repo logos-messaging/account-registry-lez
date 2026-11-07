@@ -1,0 +1,6 @@
+# At any depth: cargo run on the guest's own manifest builds into the guest's directory.
+target/
+.DS_Store
+
+# Local overrides, e.g. patching account-log to a sibling libchat checkout.
+/.cargo/config.toml

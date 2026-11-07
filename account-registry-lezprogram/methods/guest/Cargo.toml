@@ -1,0 +1,17 @@
+[package]
+name = "account-registry-guest"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+# A workspace of its own, excluded from the root one, so the guest's Cargo.lock pins exactly what
+# is compiled into the image, and with it the program ID. Updating the root lockfile cannot move
+# the ID.
+[workspace]
+
+[dependencies]
+# Must match the root workspace's pin; the program crate inherits that one.
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone", rev = "a98ca4aa7d999fd8028d2ad9898c3c34f0c0c23f" }
+account-registry-core = { path = "../../core" }
+account-registry-program = { path = "../../program" }
+risc0-zkvm = { version = "3.0.5", default-features = false, features = ["std"] }
