@@ -34,7 +34,6 @@ mod tests;
 /// # Panics
 ///
 /// On every rejected instruction — a panic is how a LEE program refuses a transaction.
-#[must_use]
 pub fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
     let [account] = input.accounts.as_slice() else {
         panic!(

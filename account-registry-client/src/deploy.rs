@@ -21,19 +21,6 @@ pub const LOCAL_PROGRAM_KEY: &str =
 /// [`LOCAL_PAYER_KEY`]'s account, as `./run-local-sequencer` names it in the genesis config.
 pub const LOCAL_PAYER_ID: &str = "78Skt7EQTvVwfWVYnA1XMjghv3aUR1V5wgQAfVLKJZG5";
 
-#[cfg(test)]
-mod tests {
-    use lee::PrivateKey;
-
-    use super::*;
-
-    #[test]
-    fn the_local_payer_id_matches_its_key() {
-        let key: PrivateKey = LOCAL_PAYER_KEY.parse().unwrap();
-        assert_eq!(LOCAL_PAYER_ID, signer_id(&key).to_string());
-    }
-}
-
 impl Registry {
     /// Deploys the registry program at the program account this registry was connected to, whose
     /// key is `header`. Upgrades it in place if an older build is there, and does nothing if this
@@ -173,8 +160,13 @@ impl Registry {
     /// so each build gets fresh segments and a retry finds the ones it already wrote.
     fn segment_account(&self, index: usize) -> AccountId {
         let mut seed = [0u8; 32];
-        for (chunk, word) in seed.chunks_exact_mut(4).zip(ACCOUNT_REGISTRY_ID) {
-            chunk.copy_from_slice(&word.to_le_bytes());
+        for (chunk, word) in seed
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(ACCOUNT_REGISTRY_ID)
+        {
+            *chunk = word.to_le_bytes();
         }
         seed[31] ^= u8::try_from(index).expect("at most MAX_PROGRAM_SEGMENTS segments");
         AccountId::for_public_pda(&self.program, &PdaSeed::new(seed))
@@ -183,4 +175,17 @@ impl Registry {
 
 fn loader_shard(account: AccountId) -> ProgramShardSelector {
     ProgramShardSelector::new(account, PROGRAM_LOADER_ACCOUNT_ID)
+}
+
+#[cfg(test)]
+mod tests {
+    use lee::PrivateKey;
+
+    use super::*;
+
+    #[test]
+    fn the_local_payer_id_matches_its_key() {
+        let key: PrivateKey = LOCAL_PAYER_KEY.parse().unwrap();
+        assert_eq!(LOCAL_PAYER_ID, signer_id(&key).to_string());
+    }
 }
