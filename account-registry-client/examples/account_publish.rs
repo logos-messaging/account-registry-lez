@@ -8,8 +8,8 @@
 //! ```
 //!
 //! Against another network, set `ACCOUNT_REGISTRY_PAYER` to a funded payer's key and
-//! `ACCOUNT_REGISTRY_PROGRAM_KEY` to the program account's key (hex). The local sequencer's
-//! genesis funds the default payer.
+//! `ACCOUNT_REGISTRY_PROGRAM_KEY` to the program account's key (hex). Both default to public
+//! keys, which only a local sequencer accepts; its genesis funds the default payer.
 
 use account_log::{
     AccountAddr, AccountEntry, AccountLogDraft, Ed25519SigningKey, Ed25519VerifyingKey, EntryData,
@@ -23,8 +23,12 @@ use account_registry_client::{
 
 fn main() {
     let url = get_sequencer_url();
-    let payer = key_from_env("ACCOUNT_REGISTRY_PAYER", LOCAL_PAYER_KEY);
-    let program = key_from_env("ACCOUNT_REGISTRY_PROGRAM_KEY", LOCAL_PROGRAM_KEY);
+    let local = is_local(&url);
+    let payer = key_from_env("ACCOUNT_REGISTRY_PAYER", local.then_some(LOCAL_PAYER_KEY));
+    let program = key_from_env(
+        "ACCOUNT_REGISTRY_PROGRAM_KEY",
+        local.then_some(LOCAL_PROGRAM_KEY),
+    );
     println!(
         "Deploying the registry at {} on {url}, unless it is already there...",
         signer_id(&program)
@@ -107,11 +111,19 @@ fn pretty_print(slog: &SignedAccountLog, addr: &AccountAddr) {
     }
 }
 
-fn key_from_env(name: &str, default: &str) -> PrivateKey {
-    std::env::var(name)
-        .unwrap_or(default.into())
-        .parse()
+/// The key in `name`, or `default` if it is unset. With no default, the key is required.
+fn key_from_env(name: &str, default: Option<&str>) -> PrivateKey {
+    let key = std::env::var(name)
+        .ok()
+        .or(default.map(str::to_owned))
+        .unwrap_or_else(|| panic!("set {name}: the default key is public, for local use only"));
+    key.parse()
         .unwrap_or_else(|_| panic!("{name} is not a 64-character hex key"))
+}
+
+fn is_local(url: &str) -> bool {
+    url::Url::parse(url)
+        .is_ok_and(|url| matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")))
 }
 
 fn get_sequencer_url() -> String {
