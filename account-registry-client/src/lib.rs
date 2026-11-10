@@ -27,10 +27,12 @@ use logos_account::{AccountProvider, AccountPublisher};
 
 use rpc::{LeeTransaction, Sequencer};
 
+#[cfg(feature = "deploy")]
 pub use deploy::{LOCAL_PAYER_ID, LOCAL_PAYER_KEY, LOCAL_PROGRAM_KEY};
 pub use error::LezAccountRegError;
 pub use lee::{AccountId, PrivateKey};
 
+#[cfg(feature = "deploy")]
 mod deploy;
 mod error;
 mod rpc;
@@ -40,6 +42,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const POLL_ATTEMPTS: u32 = 60;
 
 /// Execution gas reserved for a program loader transaction, which runs natively and meters none.
+#[cfg(feature = "deploy")]
 const LOADER_GAS_LIMIT: u64 = 1_000_000;
 
 /// The base fee `max_fee` is sized against: 8x the genesis minimum, as LEZ's own wallet does,
@@ -106,20 +109,52 @@ impl Registry {
         addr: &AccountAddr,
         log: &SignedAccountLog,
     ) -> Result<(), LezAccountRegError> {
-        let current = self.fetch(addr)?;
-        let base = current
-            .as_ref()
-            .map_or(ACCOUNT_LOG_DOMAIN, |stored| stored.payload.as_bytes());
-        let append = append_instruction(addr, base, log)?;
+        let prepared = self.prepare_append(addr, log)?;
+        let selector = ProgramShardSelector::new(prepared.account, self.program);
+        let instruction = Instruction::Append(prepared.update.clone());
+        self.send(
+            self.program,
+            vec![selector],
+            &[],
+            instruction,
+            prepared.gas_limit,
+        )?;
+        self.await_append(addr, log, &prepared)
+    }
 
-        let selector = ProgramShardSelector::new(self.account_id(addr), self.program);
-        let gas_limit = append_gas_limit(log.payload.as_bytes().len());
-        let instruction = Instruction::Append(append);
-        self.send(self.program, vec![selector], &[], instruction, gas_limit)?;
+    /// The write that takes the log on chain to `log`, for a caller that submits it itself, e.g.
+    /// through a wallet. Refuses everything the program would refuse, since a refused
+    /// transaction still pays.
+    pub fn prepare_append(
+        &self,
+        addr: &AccountAddr,
+        log: &SignedAccountLog,
+    ) -> Result<PreparedAppend, LezAccountRegError> {
+        let base = self.fetch(addr)?.map_or_else(
+            || ACCOUNT_LOG_DOMAIN.to_vec(),
+            |stored| stored.payload.as_bytes().to_vec(),
+        );
+        let update = append_instruction(addr, &base, log)?;
+        Ok(PreparedAppend {
+            account: self.account_id(addr),
+            gas_limit: append_gas_limit(log.payload.as_bytes().len()),
+            update,
+            base,
+        })
+    }
 
+    /// Waits until the chain holds `log`, after `prepared` was submitted.
+    pub fn await_append(
+        &self,
+        addr: &AccountAddr,
+        log: &SignedAccountLog,
+        prepared: &PreparedAppend,
+    ) -> Result<(), LezAccountRegError> {
         poll(|| match self.fetch(addr)? {
             Some(stored) if &stored == log => Ok(true),
-            Some(stored) if stored.payload.as_bytes() != base => Err(LezAccountRegError::Conflict),
+            Some(stored) if stored.payload.as_bytes() != prepared.base => {
+                Err(LezAccountRegError::Conflict)
+            }
             _ => Ok(false),
         })
     }
@@ -155,6 +190,26 @@ impl Registry {
         let witnesses = WitnessSet::for_message(&message, &keys);
         let tx = PublicTransaction::new(message, witnesses);
         self.rpc.send_transaction(&LeeTransaction::Public(tx))
+    }
+}
+
+/// An append ready to submit: the one account it writes, not signing, in the registry's shard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedAppend {
+    /// The account holding the log.
+    pub account: AccountId,
+    /// Execution gas to reserve; see [`append_gas_limit`].
+    pub gas_limit: u64,
+    update: LogUpdate,
+    base: Vec<u8>,
+}
+
+impl PreparedAppend {
+    /// The instruction data: the borsh-encoded `Append`.
+    #[must_use]
+    pub fn instruction_data(&self) -> Vec<u8> {
+        borsh::to_vec(&Instruction::Append(self.update.clone()))
+            .expect("borsh encoding into a Vec cannot fail")
     }
 }
 
@@ -339,7 +394,7 @@ mod tests {
     /// Reading needs no payer, writing does.
     #[test]
     fn a_write_without_a_payer_is_refused() {
-        let refused = registry().send(PROGRAM, vec![], &[], (), LOADER_GAS_LIMIT);
+        let refused = registry().send(PROGRAM, vec![], &[], (), 0);
         assert!(
             matches!(refused, Err(LezAccountRegError::NoPayer)),
             "{refused:?}"
@@ -390,6 +445,7 @@ mod tests {
     /// The round trip against a real sequencer, which also checks that `rpc` still speaks its wire
     /// format. Set `SEQUENCER_URL` to use one other than `./run-local-sequencer`'s, and
     /// `ACCOUNT_REGISTRY_PAYER` to a funded payer key other than the local genesis one.
+    #[cfg(feature = "deploy")]
     #[test]
     #[ignore = "needs a running sequencer: ./run-local-sequencer"]
     fn against_a_sequencer() {
@@ -422,6 +478,7 @@ mod tests {
     }
 
     /// A fresh header key per run, so each run deploys its own copy of the program.
+    #[cfg(feature = "deploy")]
     fn rand_bytes() -> [u8; 32] {
         Ed25519SigningKey::generate().verifying_key().to_bytes()
     }
