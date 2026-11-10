@@ -67,6 +67,8 @@ jobs:
     name: Sequencer Test
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      CARGO_TARGET_DIR_SEQUENCER: ${{ github.workspace }}/.sequencer-target
     steps:
       - uses: actions/checkout@v5
       - run: rustup toolchain install
@@ -80,9 +82,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: sequencer
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.CARGO_TARGET_DIR_SEQUENCER }}
+          key: sequencer-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
       - name: Start sequencer
         run: |
-          ./run-local-sequencer > sequencer.log 2>&1 &
+          CARGO_TARGET_DIR="$CARGO_TARGET_DIR_SEQUENCER" ./run-local-sequencer > sequencer.log 2>&1 &
           pid=$!
           for _ in $(seq 1 360); do
             curl -s -o /dev/null http://127.0.0.1:3040 && exit 0
