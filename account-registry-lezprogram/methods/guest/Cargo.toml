@@ -11,7 +11,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 # Must match the root workspace's pin; the program crate inherits that one.
-lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone", rev = "a98ca4aa7d999fd8028d2ad9898c3c34f0c0c23f" }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone", tag = "v0.3.2" }
 account-registry-core = { path = "../../core" }
 account-registry-program = { path = "../../program" }
 risc0-zkvm = { version = "3.0.5", default-features = false, features = ["std"] }

@@ -9,3 +9,6 @@ license.workspace = true
 account-log.workspace = true
 lee_core.workspace = true
 account-registry-core.workspace = true
+
+[dev-dependencies]
+borsh.workspace = true

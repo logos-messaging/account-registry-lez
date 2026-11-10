@@ -2,15 +2,20 @@
 
 A [Logos Execution Zone](https://github.com/logos-blockchain/logos-execution-zone) (LEZ) program
 that stores [λAccountLogs](https://github.com/logos-messaging/libchat) on chain. Anyone
-holding an account's address can find its log and verify it.
+holding an account's address can find its log and verify it. Built for LEZ v0.3.2, the version
+the public testnet runs.
 
 ## How it works
 
-- Each address's log lives at a PDA seeded by the address. The account's data is
-  `SignedAccountLog::to_bytes()`, exactly what libchat transmits.
+- Each address's log lives in the program's shard of a PDA seeded by the address. The shard's
+  data is `SignedAccountLog::to_bytes()`, exactly what libchat transmits.
 - The one instruction, `Append`, adds entries to the log. The program accepts it only if the
-  result extends the stored log, stays within 128 KiB, and is signed by the address. No wallet is
-  needed: the log's signature authorizes the write.
+  result extends the stored log, stays within 32 KiB, and is signed by the address. The log's
+  signature authorizes the write; a separate, funded LEE account pays the fee, so anyone can relay
+  an account's log.
+- The limit is below the AccountLog spec's 128 KiB because each append re-hashes the whole log:
+  about 3.3M cycles plus 120 per byte, against LEE's 10M-gas transaction cap. A 32 KiB log
+  appends in about 7M.
 - Readers verify the signature under the address they asked for, so an RPC node can withhold a
   log or serve an older one, but it cannot forge one.
 
@@ -27,8 +32,9 @@ holding an account's address can find its log and verify it.
 ## Usage
 
 ```rust
-let registry = Registry::connect("http://localhost:3040")?;
-registry.deploy()?; // does nothing if the program is already deployed
+let registry = Registry::connect("http://localhost:3040", signer_id(&program_key))?
+    .with_payer(payer_key);
+registry.deploy(&program_key)?; // does nothing if this build is already deployed
 
 let mut account = Account::new(registry.clone());
 account.update().set_display_name("Saro").publish()?;
@@ -44,7 +50,8 @@ version.
 ## Running locally
 
 Needs the [RISC Zero toolchain](https://dev.risczero.com/api/zkvm/install) (`rzup install`) to
-build the guest.
+build the guest, and `python3` for `run-local-sequencer`, which funds the client's local payer
+at genesis.
 
 ```sh
 ./run-local-sequencer                                                     # LEZ sequencer at the pinned revision, on :3040
@@ -57,14 +64,29 @@ The local sequencer runs with `RISC0_DEV_MODE=1`, which skips proof verification
 persists in cargo's checkout of LEZ (`.../lez/sequencer/service/rocksdb-*`); delete that to start
 over.
 
+## Deploying
+
+LEE deploys a program through its program loader: the guest's ELF goes up in segments, then a
+header at an account the deployer chooses points at them. That header account is the program's
+address, and logs live at PDAs derived from it. `Registry::deploy` does all of it, paid by the
+payer, and leaves the program upgradable by the header key: deploying a new build with the same
+key replaces the code and keeps every log. A new header key gives a separate, empty registry.
+
+Against the testnet, with a funded payer:
+
+```sh
+ACCOUNT_REGISTRY_PAYER=<payer key hex> ACCOUNT_REGISTRY_PROGRAM_KEY=<program key hex> \
+  cargo run -p account-registry-client --example account_publish https://testnet.lez.logos.co
+```
+
+Keep the program key: it is the only way to upgrade the deployment. LEZ's
+`wallet program-loader deploy` deploys the same ELF too.
+
 ## Program ID
 
-`ACCOUNT_REGISTRY_ID` is the hash of the guest binary, and logs live at PDAs derived from it, so a
-client only finds logs written under the same ID. The guest builds reproducibly, so the same
-source gives the same ID on any machine.
-
-TODO: build the guest in RISC Zero's Docker image, so the ID no longer depends on the checkout
-path or the local guest toolchain.
+`ACCOUNT_REGISTRY_ID` is the hash of the guest binary, and the program loader records it in the
+header. It changes with any change to the guest or its dependencies, but the program's address,
+and with it every log, does not.
 
 ## License
 
