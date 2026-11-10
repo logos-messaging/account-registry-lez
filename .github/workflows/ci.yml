@@ -63,6 +63,37 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked --workspace
 
+  sequencer:
+    name: Sequencer Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - name: Install RISC Zero toolchain
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          curl -L https://risczero.com/install | bash
+          "$HOME/.risc0/bin/rzup" install
+          echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sequencer
+      - name: Start sequencer
+        run: |
+          ./run-local-sequencer > sequencer.log 2>&1 &
+          pid=$!
+          for _ in $(seq 1 360); do
+            curl -s -o /dev/null http://127.0.0.1:3040 && exit 0
+            kill -0 "$pid" || exit 1
+            sleep 10
+          done
+          exit 1
+      - run: cargo test --locked -p account-registry-client -- --ignored against_a_sequencer
+      - if: failure()
+        run: tail -n 200 sequencer.log
+
   deny:
     name: Cargo Deny
     runs-on: ubuntu-latest
