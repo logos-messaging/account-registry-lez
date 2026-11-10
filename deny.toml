@@ -1,0 +1,50 @@
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+# All transitive through LEZ, risc0 or logos-blockchain; none can be bumped from here.
+ignore = [
+    "RUSTSEC-2025-0141", # bincode, unmaintained
+    "RUSTSEC-2026-0387", # crypto-bigint 0.5, timing variability
+    "RUSTSEC-2024-0388", # derivative, unmaintained
+    "RUSTSEC-2026-0118", # hickory-proto, NSEC3 validation loop
+    "RUSTSEC-2026-0119", # hickory-proto, name compression CPU exhaustion
+    "RUSTSEC-2024-0436", # paste, unmaintained
+    "RUSTSEC-2024-0370", # proc-macro-error, unmaintained
+    "RUSTSEC-2023-0071", # rsa, Marvin attack; no patched release
+    "RUSTSEC-2025-0055", # tracing-subscriber 0.2, ANSI log poisoning
+    "RUSTSEC-2024-0449", # unsafe-libyaml, unmaintained
+]
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unlicense",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = [
+    "https://github.com/EspressoSystems/jellyfish",
+    "https://github.com/arkworks-rs/spongefish",
+]
+
+[sources.allow-org]
+github = ["logos-blockchain", "logos-co", "logos-messaging"]
