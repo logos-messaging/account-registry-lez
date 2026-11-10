@@ -45,8 +45,16 @@ impl Registry {
             ));
         }
         let existing = self.deployed()?;
-        if existing.is_some_and(|deployed| deployed.image_id == ACCOUNT_REGISTRY_ID) {
+        if existing
+            .as_ref()
+            .is_some_and(|deployed| deployed.image_id == ACCOUNT_REGISTRY_ID)
+        {
             return Ok(());
+        }
+        if existing.as_ref().is_some_and(|deployed| deployed.immutable) {
+            return Err(LezAccountRegError::Deploy(
+                "another build is deployed there, immutably".into(),
+            ));
         }
 
         let segments = self.upload_segments()?;
@@ -90,8 +98,8 @@ impl Registry {
     }
 
     /// Writes this build's user ELF as a segment chain, tail first, each waiting for the next to
-    /// land, and returns the chain head first. A segment already written is kept, so a deploy
-    /// that stopped half way resumes.
+    /// land, and returns the chain head first. A segment already written with the same contents
+    /// is kept, so a deploy that stopped half way resumes; one with other contents is an error.
     fn upload_segments(&self) -> Result<Vec<AccountId>, LezAccountRegError> {
         let binary = risc0_binfmt::ProgramBinary::decode(ACCOUNT_REGISTRY_ELF)
             .map_err(|error| LezAccountRegError::Deploy(error.to_string()))?;
@@ -113,13 +121,17 @@ impl Registry {
 
         for (index, chunk) in chunks.iter().enumerate().rev() {
             let next_segment = segments.get(index + 1).copied();
-            if self.segment(segments[index])?.is_some() {
+            let expected = ProgramSegment {
+                bytecode: chunk.to_vec(),
+                next_segment,
+            };
+            if self.check_segment(segments[index], &expected)? {
                 continue;
             }
             let mut selectors = vec![loader_shard(segments[index])];
             selectors.extend(next_segment.map(loader_shard));
             let instruction = Instruction::WriteSegment {
-                bytecode: chunk.to_vec(),
+                bytecode: expected.bytecode.clone(),
                 next_segment,
             };
             self.send(
@@ -129,9 +141,25 @@ impl Registry {
                 instruction,
                 LOADER_GAS_LIMIT,
             )?;
-            poll(|| Ok(self.segment(segments[index])?.is_some()))?;
+            poll(|| self.check_segment(segments[index], &expected))?;
         }
         Ok(segments)
+    }
+
+    /// Whether `account` holds `expected`. Fails if it holds any other segment: segments are
+    /// immutable and anyone may write one, so a squatted address can never be fixed.
+    fn check_segment(
+        &self,
+        account: AccountId,
+        expected: &ProgramSegment,
+    ) -> Result<bool, LezAccountRegError> {
+        match self.segment(account)? {
+            None => Ok(false),
+            Some(segment) if &segment == expected => Ok(true),
+            Some(_) => Err(LezAccountRegError::Deploy(format!(
+                "segment {account} holds another program's bytecode"
+            ))),
+        }
     }
 
     fn segment(&self, account: AccountId) -> Result<Option<ProgramSegment>, LezAccountRegError> {
