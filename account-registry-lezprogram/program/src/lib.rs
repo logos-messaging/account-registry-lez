@@ -88,7 +88,7 @@ fn verify_log_bytes(bytes: &[u8], addr: &[u8; ADDR_LEN]) {
         "the log exceeds the size limit"
     );
     let key = Ed25519VerifyingKey::from_canonical_bytes(addr).expect("addr is not an Ed25519 key");
-    let log = SignedAccountLog::from_bytes(bytes).expect("the log exceeds the size limit");
+    let log = SignedAccountLog::from_bytes(bytes).expect("not a signed log");
     key.verify(log.payload.as_bytes(), &log.signature)
         .expect("not signed by addr");
 }

@@ -5,17 +5,16 @@
 use std::borrow::Cow;
 
 use account_log::{ACCOUNT_LOG_DOMAIN, AccountLogDraft, Context, Ed25519SigningKey, EntryData};
-use account_registry_core::{Instruction, LogUpdate, MAX_LOG_PAYLOAD_BYTES, derive_lee_account_id};
+use account_registry_core::{
+    Instruction, LogUpdate, MAX_GAS_EXEC, MAX_LOG_PAYLOAD_BYTES, SIGNATURE_LEN, append_gas_limit,
+    derive_lee_account_id,
+};
 use account_registry_methods::{ACCOUNT_REGISTRY_ELF, ACCOUNT_REGISTRY_ID};
 use lee::{
     AccountId, ProgramShardSelector, PublicTransaction, V03State, ValidatedStateDiff,
     program::Program,
     public_transaction::{Message, WitnessSet},
 };
-
-/// LEE's cap on one transaction's execution gas, one gas per cycle summed over the plan and
-/// apply sessions (`MAX_GAS_EXEC` in LEZ's fee crate).
-const MAX_GAS_EXEC: u64 = 10_000_000;
 
 /// Where the tests deploy the program, as a deployer's `CreateHeader` would.
 const PROGRAM: AccountId = AccountId::new([0xA1; 32]);
@@ -67,17 +66,25 @@ fn append_tx(update: LogUpdate) -> PublicTransaction {
     PublicTransaction::new(message, witnesses)
 }
 
-/// Applies `update`, and returns the execution cycles it cost.
+/// Applies `update` under the gas limit a client reserves for it, and returns the execution
+/// cycles it cost.
 fn apply(state: &mut V03State, update: LogUpdate) -> u64 {
+    let stored = state
+        .get_account_by_id(derive_lee_account_id(&PROGRAM, &update.addr))
+        .data
+        .shard(PROGRAM)
+        .as_ref()
+        .len();
+    let base = if stored == 0 {
+        ACCOUNT_LOG_DOMAIN.len()
+    } else {
+        stored - SIGNATURE_LEN
+    };
+    let gas_limit = append_gas_limit(base + update.entries.len());
     let tx = append_tx(update);
-    let (_, charge) = ValidatedStateDiff::from_public_transaction_with_cycle_budget(
-        &tx,
-        state,
-        1,
-        0,
-        MAX_GAS_EXEC,
-    )
-    .expect("the append fits LEE's gas cap");
+    let (_, charge) =
+        ValidatedStateDiff::from_public_transaction_with_cycle_budget(&tx, state, 1, 0, gas_limit)
+            .expect("the append fits the gas a client reserves for it");
     state
         .transition_from_public_transaction(&tx, 1, 0)
         .expect("LEE accepts the append");

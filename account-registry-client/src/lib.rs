@@ -16,6 +16,7 @@ use std::{thread, time::Duration};
 use account_log::{
     ACCOUNT_LOG_DOMAIN, AccountAddr, AccountLog, Ed25519SigningKey, SignedAccountLog,
 };
+pub use account_registry_core::append_gas_limit;
 use account_registry_core::{Instruction, LogUpdate, MAX_LOG_PAYLOAD_BYTES};
 use borsh::BorshSerialize;
 use lee::{
@@ -37,18 +38,6 @@ mod rpc;
 /// How often, and how many times, to look for a submitted transaction's effect.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const POLL_ATTEMPTS: u32 = 60;
-
-/// LEE's cap on one transaction's execution gas (`MAX_GAS_EXEC` in LEZ's fee crate).
-const MAX_GAS_EXEC: u64 = 10_000_000;
-
-/// Execution gas reserved for an append resulting in a `payload_len`-byte log. Measured on LEE
-/// v0.3.2: about 3.3M cycles for any append, plus 120 per byte of log, which the signature
-/// check hashes. A transaction that runs out is refused and still pays the full reservation.
-#[must_use]
-pub fn append_gas_limit(payload_len: usize) -> u64 {
-    let per_byte = 130 * u64::try_from(payload_len).expect("a payload fits in u64");
-    (4_000_000 + per_byte).min(MAX_GAS_EXEC)
-}
 
 /// Execution gas reserved for a program loader transaction, which runs natively and meters none.
 const LOADER_GAS_LIMIT: u64 = 1_000_000;
