@@ -451,7 +451,7 @@ mod tests {
     fn against_a_sequencer() {
         let url = std::env::var("SEQUENCER_URL").unwrap_or("http://localhost:3040".into());
         let payer = std::env::var("ACCOUNT_REGISTRY_PAYER")
-            .map_or(LOCAL_PAYER_KEY.into(), |key| key)
+            .unwrap_or(LOCAL_PAYER_KEY.into())
             .parse::<PrivateKey>()
             .unwrap();
         let header = PrivateKey::try_new(rand_bytes()).unwrap();
