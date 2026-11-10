@@ -1,4 +1,4 @@
 # Kept in sync with the upstream logos-execution-zone toolchain.
 [toolchain]
-channel = "1.94.0"
+channel = "1.98.1"
 profile = "default"
