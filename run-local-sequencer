@@ -28,7 +28,7 @@ fi
 # source URL — so both halves are discovered rather than hardcoded.
 find_checkout() {
     find "$cargo_home/git/checkouts" -maxdepth 2 -type d -name "${rev:0:7}" \
-        -path '*logos-execution-zone*' 2>/dev/null | head -1
+        -path '*logos-execution-zone*' 2>/dev/null | head -1 || true
 }
 
 checkout=$(find_checkout)
