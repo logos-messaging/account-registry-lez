@@ -18,6 +18,19 @@ pub const SIGNATURE_LEN: usize = 64;
 /// written again. Clients must check it before sending, since a refused write still pays.
 pub const MAX_LOG_PAYLOAD_BYTES: usize = 32 * 1024;
 
+/// LEE's cap on one transaction's execution gas, one gas per cycle summed over the plan and
+/// apply sessions (`MAX_GAS_EXEC` in LEZ's fee crate).
+pub const MAX_GAS_EXEC: u64 = 10_000_000;
+
+/// Execution gas to reserve for an append resulting in a `payload_len`-byte log. Measured on LEE
+/// v0.3.2: about 3.3M cycles for any append, plus 120 per byte of log, which the signature
+/// check hashes. A transaction that runs out is refused and still pays the full reservation.
+#[must_use]
+pub fn append_gas_limit(payload_len: usize) -> u64 {
+    let per_byte = 130 * u64::try_from(payload_len).expect("a payload fits in u64");
+    (4_000_000 + per_byte).min(MAX_GAS_EXEC)
+}
+
 /// An instruction to the program: the type its instruction data decodes to.
 ///
 /// Borsh writes the variant's index as a leading byte, so each operation's position is its opcode.
