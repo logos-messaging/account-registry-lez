@@ -147,7 +147,10 @@ impl Registry {
         gas_limit: u64,
     ) -> Result<(), LezAccountRegError> {
         let payer = self.payer.as_ref().ok_or(LezAccountRegError::NoPayer)?;
-        let keys: Vec<&PrivateKey> = signers.iter().copied().chain([payer]).collect();
+        let mut keys = signers.to_vec();
+        if !keys.iter().any(|key| signer_id(key) == signer_id(payer)) {
+            keys.push(payer);
+        }
         let nonces = keys
             .iter()
             .map(|key| Ok(self.rpc.get_account(signer_id(key))?.nonce))
