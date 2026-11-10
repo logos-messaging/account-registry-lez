@@ -2,17 +2,17 @@
 
 use account_log::{
     ACCOUNT_LOG_DOMAIN, AccountAddr, AccountLogDraft, AccountRecord, Context, Ed25519SigningKey,
-    EntryData, MAX_PAYLOAD_BYTES, SignedAccountLog,
+    EntryData, SignedAccountLog,
 };
-use account_registry_core::{LogUpdate, derive_lee_account_id};
+use account_registry_core::{Instruction, LogUpdate, MAX_LOG_PAYLOAD_BYTES, derive_lee_account_id};
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata},
-    program::{Claim, PdaSeed, ProgramId},
+    account::AccountId,
+    program::{AccountMeta, PlanInput},
 };
 
-use crate::append;
+use crate::{apply, plan};
 
-const PROGRAM_ID: ProgramId = [7; 8];
+const PROGRAM: AccountId = AccountId::new([7; 32]);
 
 /// The canonical payload of a log holding `texts`, in order.
 fn log(texts: &[&str]) -> Vec<u8> {
@@ -44,23 +44,33 @@ impl Owner {
         }
     }
 
-    fn account(&self, account: Account) -> AccountWithMetadata {
-        AccountWithMetadata {
-            account,
-            is_authorized: false,
-            account_id: derive_lee_account_id(&PROGRAM_ID, &self.addr()),
-        }
+    fn account(&self) -> AccountMeta {
+        AccountMeta::new(
+            derive_lee_account_id(&PROGRAM, &self.addr()),
+            false,
+            PROGRAM,
+        )
     }
 }
 
-/// Runs `instruction` and applies the result as LEE would, claim included.
-fn run(pre: AccountWithMetadata, instruction: LogUpdate) -> Account {
-    let post = append(pre, PROGRAM_ID, instruction);
-    let mut account = post.account().clone();
-    if post.required_claim().is_some() {
-        account.program_owner = AccountId::from(PROGRAM_ID);
+fn plan_input(accounts: Vec<AccountMeta>, update: &LogUpdate) -> PlanInput {
+    PlanInput {
+        self_account_id: PROGRAM,
+        caller_account_id: None,
+        accounts,
+        instruction_data: borsh::to_vec(&Instruction::Append(update.clone())).unwrap(),
     }
-    account
+}
+
+/// Plans `update` against `account`, then applies the effect to `stored`, as LEE would.
+fn run(account: AccountMeta, stored: &[u8], update: LogUpdate) -> Vec<u8> {
+    let input = plan_input(vec![account], &update);
+    let planned = plan(&input, Instruction::Append(update));
+    let [effect] = planned.output().effects.as_slice() else {
+        panic!("one effect per append")
+    };
+    let update = borsh::from_slice(&effect.data).unwrap();
+    apply(update, stored).expect("an append always writes")
 }
 
 #[test]
@@ -68,21 +78,27 @@ fn creates_then_extends_a_log_readers_accept() {
     let owner = Owner::new();
     let (v1, v2) = (log(&["one"]), log(&["one", "two"]));
 
-    let pre = owner.account(Account::default());
-    let post = append(pre, PROGRAM_ID, owner.append(ACCOUNT_LOG_DOMAIN, &v1));
-    let claim = Claim::Pda(PdaSeed::new(owner.addr()));
-    assert_eq!(post.required_claim(), Some(claim));
+    let created = run(owner.account(), &[], owner.append(ACCOUNT_LOG_DOMAIN, &v1));
+    let extended = run(owner.account(), &created, owner.append(&v1, &v2));
 
-    let created = run(
-        owner.account(Account::default()),
-        owner.append(ACCOUNT_LOG_DOMAIN, &v1),
-    );
-    let extended = run(owner.account(created), owner.append(&v1, &v2));
-
-    let stored = SignedAccountLog::from_bytes(extended.data.as_ref()).unwrap();
+    let stored = SignedAccountLog::from_bytes(&extended).unwrap();
     let addr = AccountAddr::try_from(&owner.addr()[..]).unwrap();
     let record = AccountRecord::new(addr, stored).unwrap();
     assert_eq!(record.signed_log().payload.as_bytes(), v2);
+}
+
+#[test]
+fn plans_one_effect_on_the_addrs_shard() {
+    let owner = Owner::new();
+    let update = owner.append(ACCOUNT_LOG_DOMAIN, &log(&["one"]));
+    let input = plan_input(vec![owner.account()], &update);
+
+    let planned = plan(&input, Instruction::Append(update));
+    let [effect] = planned.output().effects.as_slice() else {
+        panic!("one effect per append")
+    };
+    assert_eq!(effect.selector.account_id, owner.account().account_id);
+    assert_eq!(effect.selector.program_account_id, PROGRAM);
 }
 
 #[test]
@@ -90,7 +106,25 @@ fn creates_then_extends_a_log_readers_accept() {
 fn rejects_another_addresss_account() {
     let (owner, victim) = (Owner::new(), Owner::new());
     let append = owner.append(ACCOUNT_LOG_DOMAIN, &log(&["one"]));
-    run(victim.account(Account::default()), append);
+    run(victim.account(), &[], append);
+}
+
+#[test]
+#[should_panic(expected = "exactly one account")]
+fn rejects_more_than_one_account() {
+    let (owner, other) = (Owner::new(), Owner::new());
+    let append = owner.append(ACCOUNT_LOG_DOMAIN, &log(&["one"]));
+    let input = plan_input(vec![owner.account(), other.account()], &append);
+    let _ = plan(&input, Instruction::Append(append));
+}
+
+#[test]
+#[should_panic(expected = "names the shard of")]
+fn rejects_another_programs_shard() {
+    let owner = Owner::new();
+    let append = owner.append(ACCOUNT_LOG_DOMAIN, &log(&["one"]));
+    let foreign = AccountMeta::new(owner.account().account_id, false, AccountId::new([9; 32]));
+    run(foreign, &[], append);
 }
 
 #[test]
@@ -99,7 +133,7 @@ fn rejects_a_signature_by_another_key() {
     let (owner, forger) = (Owner::new(), Owner::new());
     let mut append = forger.append(ACCOUNT_LOG_DOMAIN, &log(&["one"]));
     append.addr = owner.addr();
-    run(owner.account(Account::default()), append);
+    run(owner.account(), &[], append);
 }
 
 #[test]
@@ -107,18 +141,17 @@ fn rejects_a_signature_by_another_key() {
 fn rejects_a_write_prepared_against_a_stale_log() {
     let owner = Owner::new();
     let v1 = log(&["one"]);
-    let at_v1 = run(
-        owner.account(Account::default()),
-        owner.append(ACCOUNT_LOG_DOMAIN, &v1),
-    );
+    let at_v1 = run(owner.account(), &[], owner.append(ACCOUNT_LOG_DOMAIN, &v1));
     let at_v2 = run(
-        owner.account(at_v1),
+        owner.account(),
+        &at_v1,
         owner.append(&v1, &log(&["one", "two"])),
     );
 
     // Prepared against v1, landing after v2.
     run(
-        owner.account(at_v2),
+        owner.account(),
+        &at_v2,
         owner.append(&v1, &log(&["one", "other"])),
     );
 }
@@ -127,11 +160,25 @@ fn rejects_a_write_prepared_against_a_stale_log() {
 #[should_panic(expected = "exceeds the size limit")]
 fn rejects_a_log_over_the_size_limit() {
     let owner = Owner::new();
-    let payload = [ACCOUNT_LOG_DOMAIN, &vec![0; MAX_PAYLOAD_BYTES]].concat();
+    let payload = [ACCOUNT_LOG_DOMAIN, &vec![0; MAX_LOG_PAYLOAD_BYTES]].concat();
     run(
-        owner.account(Account::default()),
+        owner.account(),
+        &[],
         owner.append(ACCOUNT_LOG_DOMAIN, &payload),
     );
+}
+
+#[test]
+fn accepts_a_log_at_the_size_limit() {
+    let owner = Owner::new();
+    let filler = MAX_LOG_PAYLOAD_BYTES - ACCOUNT_LOG_DOMAIN.len();
+    let payload = [ACCOUNT_LOG_DOMAIN, &vec![0; filler]].concat();
+    let stored = run(
+        owner.account(),
+        &[],
+        owner.append(ACCOUNT_LOG_DOMAIN, &payload),
+    );
+    assert_eq!(stored.len(), 64 + MAX_LOG_PAYLOAD_BYTES);
 }
 
 /// The identity point is a valid encoding but small-order: anyone can forge a signature under
@@ -143,12 +190,8 @@ fn rejects_an_addr_that_is_not_an_ed25519_key() {
     identity[0] = 1;
     let mut append = Owner::new().append(ACCOUNT_LOG_DOMAIN, &log(&["one"]));
     append.addr = identity;
-    let pre = AccountWithMetadata {
-        account: Account::default(),
-        is_authorized: false,
-        account_id: derive_lee_account_id(&PROGRAM_ID, &identity),
-    };
-    run(pre, append);
+    let account = AccountMeta::new(derive_lee_account_id(&PROGRAM, &identity), false, PROGRAM);
+    run(account, &[], append);
 }
 
 #[test]
@@ -156,5 +199,5 @@ fn rejects_an_addr_that_is_not_an_ed25519_key() {
 fn rejects_an_empty_append() {
     let owner = Owner::new();
     let append = owner.append(ACCOUNT_LOG_DOMAIN, ACCOUNT_LOG_DOMAIN);
-    run(owner.account(Account::default()), append);
+    run(owner.account(), &[], append);
 }

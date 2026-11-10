@@ -12,6 +12,10 @@ logos-account.workspace = true
 account-registry-core.workspace = true
 account-registry-methods.workspace = true
 base64.workspace = true
+lee_core.workspace = true
+program_loader_core.workspace = true
+risc0-binfmt.workspace = true
+risc0-zkos-v1compat.workspace = true
 borsh = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -21,6 +25,5 @@ url.workspace = true
 
 [dev-dependencies]
 account-registry-program.workspace = true
-lee_core.workspace = true
 # Only to check `rpc::LeeTransaction` encodes exactly like LEZ's own; it pulls in tokio.
 lez_common.workspace = true

@@ -6,6 +6,10 @@
 //! ```sh
 //! cargo run -p account-registry-client --example account_publish [SEQUENCER_URL]
 //! ```
+//!
+//! Against another network, set `ACCOUNT_REGISTRY_PAYER` to a funded payer's key and
+//! `ACCOUNT_REGISTRY_PROGRAM_KEY` to the program account's key (hex). The local sequencer's
+//! genesis funds the default payer.
 
 use account_log::{
     AccountAddr, AccountEntry, AccountLogDraft, Ed25519SigningKey, Ed25519VerifyingKey, EntryData,
@@ -13,13 +17,22 @@ use account_log::{
 };
 use logos_account::{Account, ChatRead, ChatWrite, ProfileRead, ProfileWrite};
 
-use account_registry_client::Registry;
+use account_registry_client::{
+    LOCAL_PAYER_KEY, LOCAL_PROGRAM_KEY, PrivateKey, Registry, signer_id,
+};
 
 fn main() {
     let url = get_sequencer_url();
-    println!("Deploying the registry to {url}, unless it is already there... (~45 seconds)");
-    let provider = Registry::connect(&url).expect("registry failed init");
-    provider.deploy().expect("deploy failed");
+    let payer = key_from_env("ACCOUNT_REGISTRY_PAYER", LOCAL_PAYER_KEY);
+    let program = key_from_env("ACCOUNT_REGISTRY_PROGRAM_KEY", LOCAL_PROGRAM_KEY);
+    println!(
+        "Deploying the registry at {} on {url}, unless it is already there...",
+        signer_id(&program)
+    );
+    let provider = Registry::connect(&url, signer_id(&program))
+        .expect("registry failed init")
+        .with_payer(payer);
+    provider.deploy(&program).expect("deploy failed");
 
     let mut account = Account::new(provider.clone());
 
@@ -92,6 +105,13 @@ fn pretty_print(slog: &SignedAccountLog, addr: &AccountAddr) {
             }
         }
     }
+}
+
+fn key_from_env(name: &str, default: &str) -> PrivateKey {
+    std::env::var(name)
+        .unwrap_or(default.into())
+        .parse()
+        .unwrap_or_else(|_| panic!("{name} is not a 64-character hex key"))
 }
 
 fn get_sequencer_url() -> String {
