@@ -16,8 +16,8 @@ use std::{thread, time::Duration};
 use account_log::{
     ACCOUNT_LOG_DOMAIN, AccountAddr, AccountLog, Ed25519SigningKey, SignedAccountLog,
 };
-pub use account_registry_core::{MAX_LOG_PAYLOAD_BYTES, append_gas_limit};
 use account_registry_core::{Instruction, LogUpdate};
+pub use account_registry_core::{MAX_LOG_PAYLOAD_BYTES, append_gas_limit};
 use borsh::BorshSerialize;
 use lee::{
     FeeDeclaration, ProgramShardSelector, PublicKey, PublicTransaction,
