@@ -72,7 +72,8 @@ address, and logs live at PDAs derived from it. `Registry::deploy` does all of i
 payer, and leaves the program upgradable by the header key: deploying a new build with the same
 key replaces the code and keeps every log. A new header key gives a separate, empty registry.
 
-Against the testnet, with a funded payer:
+Against the testnet, with a funded payer (`cargo run -p account-registry-client --example keygen`
+makes a key and prints its account to fund):
 
 ```sh
 ACCOUNT_REGISTRY_PAYER=<payer key hex> ACCOUNT_REGISTRY_PROGRAM_KEY=<program key hex> \

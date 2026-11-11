@@ -22,9 +22,16 @@ cargo_home=${CARGO_HOME:-$HOME/.cargo}
 local_payer=78Skt7EQTvVwfWVYnA1XMjghv3aUR1V5wgQAfVLKJZG5
 
 # Cargo.toml pins a tag; Cargo.lock records the commit it resolved to.
-[[ -f $repo_root/Cargo.lock ]] || (cd "$repo_root" && cargo fetch)
-rev=$(sed -n 's/.*logos-execution-zone?tag=[^#]*#\([0-9a-f]\{7,\}\)".*/\1/p' \
-    "$repo_root/Cargo.lock" | head -1)
+tag=$(sed -n 's/.*logos-execution-zone", tag = "\([^"]*\)".*/\1/p' "$repo_root/Cargo.toml" | head -1)
+locked_rev() {
+    sed -n "s/.*logos-execution-zone?tag=${tag}#\([0-9a-f]\{7,\}\)\".*/\1/p" \
+        "$repo_root/Cargo.lock" 2>/dev/null | head -1
+}
+rev=$(locked_rev)
+if [[ -z $rev ]]; then
+    (cd "$repo_root" && cargo fetch)
+    rev=$(locked_rev)
+fi
 
 if [[ -z $rev ]]; then
     echo "run-local-sequencer: no logos-execution-zone revision found in Cargo.lock" >&2
@@ -35,7 +42,7 @@ fi
 # source URL — so both halves are discovered rather than hardcoded.
 find_checkout() {
     find "$cargo_home/git/checkouts" -maxdepth 2 -type d -name "${rev:0:7}" \
-        -path '*logos-execution-zone*' 2>/dev/null | head -1
+        -path '*logos-execution-zone*' 2>/dev/null | head -1 || true
 }
 
 checkout=$(find_checkout)

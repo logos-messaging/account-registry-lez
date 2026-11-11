@@ -76,12 +76,21 @@ impl Registry {
         })
     }
 
-    /// The header at the program account, if anything is deployed there.
+    /// The header at the program account, if anything is deployed there. Fails if the account
+    /// holds other loader data, such as a segment: a header can never be created over it.
     fn deployed(&self) -> Result<Option<ProgramHeader>, LezAccountRegError> {
         let account = self.rpc.get_account(self.program)?;
-        Ok(ProgramHeader::from_bytes(
-            account.data.shard(PROGRAM_LOADER_ACCOUNT_ID).as_ref(),
-        ))
+        let shard = account.data.shard(PROGRAM_LOADER_ACCOUNT_ID);
+        if shard.is_empty() {
+            return Ok(None);
+        }
+        ProgramHeader::from_bytes(shard.as_ref())
+            .map(Some)
+            .ok_or_else(|| {
+                LezAccountRegError::Deploy(
+                    "the program account holds loader data that is not a header".into(),
+                )
+            })
     }
 
     /// Writes this build's user ELF as a segment chain, tail first, each waiting for the next to
