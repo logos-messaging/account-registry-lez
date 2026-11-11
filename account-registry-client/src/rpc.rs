@@ -1,8 +1,8 @@
-//! The sequencer calls the client makes, as blocking JSON-RPC 2.0 over HTTP.
+//! The two sequencer calls the client makes, as blocking JSON-RPC 2.0 over HTTP.
 //!
 //! LEZ's own client (`sequencer_service_rpc`) is async and needs tokio, so this speaks its wire
 //! format directly. The method names, positional parameters and encodings below must match its
-//! `Rpc` trait at the pinned revision. Bump them together; the CLI crate's ignored `against_a_sequencer` test
+//! `Rpc` trait at the pinned revision. Bump them together; the ignored `against_a_sequencer` test
 //! checks them end to end.
 
 use std::time::Duration;
@@ -53,14 +53,6 @@ impl Sequencer {
     /// The account's current state; a default account if nothing was ever written to it.
     pub(crate) fn get_account(&self, account_id: AccountId) -> Result<Account, LezAccountRegError> {
         self.call("getAccount", (account_id,))
-    }
-
-    /// The account's native balance, in the zone's smallest unit.
-    pub(crate) fn get_account_balance(
-        &self,
-        account_id: AccountId,
-    ) -> Result<u128, LezAccountRegError> {
-        self.call("getAccountBalance", (account_id,))
     }
 
     /// Returns once the sequencer has accepted `tx`, not once it is in a block.

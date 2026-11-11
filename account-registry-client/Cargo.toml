@@ -10,7 +10,12 @@ account-log.workspace = true
 lee.workspace = true
 logos-account.workspace = true
 account-registry-core.workspace = true
+account-registry-methods.workspace = true
 base64.workspace = true
+lee_core.workspace = true
+program_loader_core.workspace = true
+risc0-binfmt.workspace = true
+risc0-zkos-v1compat.workspace = true
 borsh = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

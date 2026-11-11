@@ -9,7 +9,7 @@
 //! [`Registry`] implements libchat's [`AccountProvider`] and [`AccountPublisher`], so it can back
 //! an [`Account`](logos_account::Account) or an
 //! [`AccountResolver`](logos_account::AccountResolver) directly. The program must be deployed
-//! first, at the account the registry was connected to; the `account-registry` CLI does that.
+//! first, at the account the registry was connected to; see [`Registry::deploy`].
 
 use std::{thread, time::Duration};
 
@@ -20,22 +20,27 @@ use account_registry_core::{Instruction, LogUpdate};
 pub use account_registry_core::{MAX_LOG_PAYLOAD_BYTES, append_gas_limit};
 use borsh::BorshSerialize;
 use lee::{
-    FeeDeclaration, PublicKey, PublicTransaction,
+    FeeDeclaration, ProgramShardSelector, PublicKey, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use logos_account::{AccountProvider, AccountPublisher};
 
 use rpc::{LeeTransaction, Sequencer};
 
+pub use deploy::{LOCAL_PAYER_ID, LOCAL_PAYER_KEY, LOCAL_PROGRAM_KEY};
 pub use error::LezAccountRegError;
-pub use lee::{Account, AccountId, PrivateKey, ProgramShardSelector};
+pub use lee::{AccountId, PrivateKey};
 
+mod deploy;
 mod error;
 mod rpc;
 
 /// How often, and how many times, to look for a submitted transaction's effect.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const POLL_ATTEMPTS: u32 = 150;
+
+/// Execution gas reserved for a program loader transaction, which runs natively and meters none.
+const LOADER_GAS_LIMIT: u64 = 1_000_000;
 
 /// The base fee `max_fee` is sized against: 8x the genesis minimum, as LEZ's own wallet does,
 /// so a transaction survives early congestion without re-signing.
@@ -151,21 +156,10 @@ impl Registry {
         })
     }
 
-    /// The current state of any account on the zone; a default account if nothing was ever
-    /// written to it.
-    pub fn account(&self, id: AccountId) -> Result<Account, LezAccountRegError> {
-        self.rpc.get_account(id)
-    }
-
-    /// The native balance of any account on the zone, in its smallest unit.
-    pub fn balance(&self, id: AccountId) -> Result<u128, LezAccountRegError> {
-        self.rpc.get_account_balance(id)
-    }
-
     /// Sends a transaction to `program` over `selectors`, signed by `signers` and paid by the
     /// configured payer, each at its current nonce, reserving `gas_limit` execution gas. Returns
-    /// once the sequencer accepts it, not once it is in a block.
-    pub fn send(
+    /// once the sequencer accepts it.
+    fn send(
         &self,
         program: AccountId,
         selectors: Vec<ProgramShardSelector>,
@@ -397,7 +391,7 @@ mod tests {
     /// Reading needs no payer, writing does.
     #[test]
     fn a_write_without_a_payer_is_refused() {
-        let refused = registry().send(PROGRAM, vec![], &[], (), 0);
+        let refused = registry().send(PROGRAM, vec![], &[], (), LOADER_GAS_LIMIT);
         assert!(
             matches!(refused, Err(LezAccountRegError::NoPayer)),
             "{refused:?}"
@@ -443,5 +437,44 @@ mod tests {
             serde_json::to_value(Lez::Public(public.clone())).unwrap(),
             LeeTransaction::Public(public).to_base64()
         );
+    }
+
+    /// The round trip against a real sequencer, which also checks that `rpc` still speaks its wire
+    /// format. Set `SEQUENCER_URL` to use one other than `./run-local-sequencer`'s, and
+    /// `ACCOUNT_REGISTRY_PAYER` to a funded payer key other than the local genesis one.
+    #[test]
+    #[ignore = "needs a running sequencer: ./run-local-sequencer"]
+    fn against_a_sequencer() {
+        let url = std::env::var("SEQUENCER_URL").unwrap_or("http://localhost:3040".into());
+        let payer = std::env::var("ACCOUNT_REGISTRY_PAYER")
+            .unwrap_or(LOCAL_PAYER_KEY.into())
+            .parse::<PrivateKey>()
+            .unwrap();
+        let header = PrivateKey::try_new(rand_bytes()).unwrap();
+        let registry = Registry::connect(&url, signer_id(&header))
+            .unwrap()
+            .with_payer(payer);
+        registry.deploy(&header).unwrap();
+
+        let key = Ed25519SigningKey::generate();
+        let addr = AccountAddr::from(key.verifying_key());
+        assert!(registry.fetch(&addr).unwrap().is_none());
+
+        let v1 = one_key_log();
+        registry.publish(&addr, &sign(&key, &v1).unwrap()).unwrap();
+        let stored = registry.fetch(&addr).unwrap().unwrap();
+        assert_eq!(stored.verify(&addr).unwrap(), v1);
+
+        let mut v2 = AccountLogDraft::from_log(&v1).unwrap();
+        v2.revoke(0).unwrap();
+        let v2 = v2.log().clone();
+        registry.publish(&addr, &sign(&key, &v2).unwrap()).unwrap();
+        let stored = registry.fetch(&addr).unwrap().unwrap();
+        assert_eq!(stored.verify(&addr).unwrap(), v2);
+    }
+
+    /// A fresh header key per run, so each run deploys its own copy of the program.
+    fn rand_bytes() -> [u8; 32] {
+        Ed25519SigningKey::generate().verifying_key().to_bytes()
     }
 }

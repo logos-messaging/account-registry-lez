@@ -1,8 +1,8 @@
 //! A libchat `Account` backed by the registry: publish a display name and a chat signer, then
 //! fetch the log back by address alone and read the values out of it.
 //!
-//! Start a sequencer with `./run-local-sequencer` and deploy the registry with
-//! `cargo run -p account-registry-cli -- deploy`, then:
+//! Start a sequencer with `./run-local-sequencer` and deploy the registry with the `deploy`
+//! example, then:
 //!
 //! ```sh
 //! cargo run -p account-registry-client --example account_publish [SEQUENCER_URL]
@@ -10,7 +10,7 @@
 //!
 //! Against another network, set `ACCOUNT_REGISTRY_PAYER` to a funded payer's key (hex) and
 //! `ACCOUNT_REGISTRY_PROGRAM` to the registry's program account (base58). Both default to what
-//! the CLI's `deploy` uses on a local sequencer, whose genesis funds the default payer.
+//! the `deploy` example uses on a local sequencer, whose genesis funds the default payer.
 
 use account_log::{
     AccountAddr, AccountEntry, AccountLogDraft, Ed25519SigningKey, Ed25519VerifyingKey, EntryData,
@@ -18,11 +18,9 @@ use account_log::{
 };
 use logos_account::{Account, ChatRead, ChatWrite, ProfileRead, ProfileWrite};
 
-use account_registry_client::{AccountId, PrivateKey, Registry, signer_id};
-
-/// The payer `./run-local-sequencer` funds at genesis, and the key the CLI deploys under there.
-const LOCAL_PAYER_KEY: &str = "1111111111111111111111111111111111111111111111111111111111111111";
-const LOCAL_PROGRAM_KEY: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+use account_registry_client::{
+    AccountId, LOCAL_PAYER_KEY, LOCAL_PROGRAM_KEY, PrivateKey, Registry, signer_id,
+};
 
 fn main() {
     let url = get_sequencer_url();
@@ -117,7 +115,7 @@ fn key_from_env(name: &str, default: Option<&str>) -> PrivateKey {
         .unwrap_or_else(|_| panic!("{name} is not a 64-character hex key"))
 }
 
-/// The registry in `ACCOUNT_REGISTRY_PROGRAM`, or the one the CLI deploys locally.
+/// The registry in `ACCOUNT_REGISTRY_PROGRAM`, or the `deploy` example's local one.
 fn program_from_env(local: bool) -> AccountId {
     match std::env::var("ACCOUNT_REGISTRY_PROGRAM") {
         Ok(program) => program

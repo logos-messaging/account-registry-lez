@@ -18,7 +18,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cargo_home=${CARGO_HOME:-$HOME/.cargo}
 
-# Must match `LOCAL_PAYER_ID` in account-registry-cli/src/main.rs.
+# Must match `LOCAL_PAYER_ID` in account-registry-client/src/deploy.rs.
 local_payer=78Skt7EQTvVwfWVYnA1XMjghv3aUR1V5wgQAfVLKJZG5
 
 # Cargo.toml pins a tag; Cargo.lock records the commit it resolved to.

@@ -22,6 +22,8 @@ pub enum LezAccountRegError {
     TooLarge(usize),
     #[error("writing needs a fee payer; see Registry::with_payer")]
     NoPayer,
+    #[error("deploying the program: {0}")]
+    Deploy(String),
     #[error("another write landed first; fetch and rebuild the log")]
     Conflict,
     #[error("the transaction did not take effect in time")]

@@ -79,7 +79,7 @@ jobs:
           CARGO_TARGET_DIR="$CARGO_TARGET_DIR_SEQUENCER" ./run-local-sequencer > sequencer.log 2>&1 &
           curl -so /dev/null --retry-connrefused --retry 360 --retry-delay 10 http://127.0.0.1:3040 &
           wait -n
-      - run: cargo test --locked -p account-registry-cli -- --ignored against_a_sequencer
+      - run: cargo test --locked -p account-registry-client -- --ignored against_a_sequencer
       - if: failure()
         run: tail -n 200 sequencer.log
 
