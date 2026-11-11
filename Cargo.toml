@@ -5,6 +5,7 @@ members = [
     "account-registry-lezprogram/program",
     "account-registry-lezprogram/methods",
     "account-registry-client",
+    "account-registry-cli",
 ]
 # The guest is its own workspace, so its Cargo.lock alone decides what goes into the image.
 exclude = ["account-registry-lezprogram/methods/guest"]
@@ -18,6 +19,7 @@ license = "MIT OR Apache-2.0"
 account-registry-core = { path = "account-registry-lezprogram/core" }
 account-registry-program = { path = "account-registry-lezprogram/program" }
 account-registry-methods = { path = "account-registry-lezprogram/methods" }
+account-registry-client = { path = "account-registry-client" }
 
 # One revision for every LEZ crate: the program, the client and the sequencer must agree on the
 # protocol. Bump them together, and with them the guest's `lee_core`
@@ -34,6 +36,7 @@ logos-account = { package = "account", git = "https://github.com/logos-messaging
 
 base64 = "0.22.1"
 borsh = "1.5.7"
+clap = { version = "4.5", features = ["derive", "env"] }
 # The versions LEZ v0.3.2 resolves; the program loader accepts only its default kernel.
 risc0-binfmt = "3.0.2"
 risc0-zkos-v1compat = "=2.2.2"
