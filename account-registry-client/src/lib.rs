@@ -11,13 +11,16 @@
 //! [`AccountResolver`](logos_account::AccountResolver) directly. The program must be deployed
 //! first, at the account the registry was connected to; see [`Registry::deploy`].
 
-use std::{thread, time::Duration};
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 
 use account_log::{
     ACCOUNT_LOG_DOMAIN, AccountAddr, AccountLog, Ed25519SigningKey, SignedAccountLog,
 };
-pub use account_registry_core::append_gas_limit;
-use account_registry_core::{Instruction, LogUpdate, MAX_LOG_PAYLOAD_BYTES};
+use account_registry_core::{Instruction, LogUpdate};
+pub use account_registry_core::{MAX_LOG_PAYLOAD_BYTES, append_gas_limit};
 use borsh::BorshSerialize;
 use lee::{
     FeeDeclaration, ProgramShardSelector, PublicKey, PublicTransaction,
@@ -38,6 +41,10 @@ mod rpc;
 /// How often, and how many times, to look for a submitted transaction's effect.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const POLL_ATTEMPTS: u32 = 150;
+
+/// How long [`Registry::publish`] waits for its write to land. The public testnet makes about one
+/// block a minute.
+pub const PUBLISH_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Execution gas reserved for a program loader transaction, which runs natively and meters none.
 const LOADER_GAS_LIMIT: u64 = 1_000_000;
@@ -106,21 +113,40 @@ impl Registry {
         addr: &AccountAddr,
         log: &SignedAccountLog,
     ) -> Result<(), LezAccountRegError> {
-        let current = self.fetch(addr)?;
-        let base = current
-            .as_ref()
-            .map_or(ACCOUNT_LOG_DOMAIN, |stored| stored.payload.as_bytes());
-        let append = append_instruction(addr, base, log)?;
+        let prepared = self.prepare_append(addr, log)?;
+        self.send(
+            prepared.program,
+            vec![prepared.selector()],
+            &[],
+            &prepared.instruction,
+            prepared.gas_limit,
+        )?;
+        self.await_append(&prepared, PUBLISH_TIMEOUT)
+    }
 
-        let selector = ProgramShardSelector::new(self.account_id(addr), self.program);
-        let gas_limit = append_gas_limit(log.payload.as_bytes().len());
-        let instruction = Instruction::Append(append);
-        self.send(self.program, vec![selector], &[], instruction, gas_limit)?;
+    /// The write that takes the log on chain to `log`, for a caller that submits it itself, e.g.
+    /// through a wallet. Refuses everything the program would refuse, since a refused
+    /// transaction still pays.
+    pub fn prepare_append(
+        &self,
+        addr: &AccountAddr,
+        log: &SignedAccountLog,
+    ) -> Result<PreparedAppend, LezAccountRegError> {
+        let stored = self.fetch(addr)?;
+        PreparedAppend::new(self.program, addr, stored.as_ref(), log)
+    }
 
-        poll(|| match self.fetch(addr)? {
-            Some(stored) if &stored == log => Ok(true),
-            Some(stored) if stored.payload.as_bytes() != base => Err(LezAccountRegError::Conflict),
-            _ => Ok(false),
+    /// Waits up to `timeout` for the chain to hold the log `prepared` was made for, after the
+    /// caller submitted it. Call it only once the transaction was accepted: one that was never
+    /// sent is indistinguishable from a slow one, and ends in
+    /// [`LezAccountRegError::Timeout`].
+    pub fn await_append(
+        &self,
+        prepared: &PreparedAppend,
+        timeout: Duration,
+    ) -> Result<(), LezAccountRegError> {
+        poll_for(timeout, || {
+            prepared.landed(self.fetch(&prepared.addr)?.as_ref())
         })
     }
 
@@ -155,6 +181,66 @@ impl Registry {
         let witnesses = WitnessSet::for_message(&message, &keys);
         let tx = PublicTransaction::new(message, witnesses);
         self.rpc.send_transaction(&LeeTransaction::Public(tx))
+    }
+}
+
+/// An append ready to submit: a call to `program` over one account, `account`, not signing, in
+/// `program`'s shard. It remembers the address and the log it was prepared for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedAppend {
+    /// The registry's program account, which the transaction calls.
+    pub program: AccountId,
+    /// The account holding the log.
+    pub account: AccountId,
+    /// Execution gas to reserve; see [`append_gas_limit`].
+    pub gas_limit: u64,
+    addr: AccountAddr,
+    log: SignedAccountLog,
+    instruction: Instruction,
+    base: Vec<u8>,
+}
+
+impl PreparedAppend {
+    /// The write that takes `addr`'s log from `stored`, `None` if nothing is published, to `log`.
+    fn new(
+        program: AccountId,
+        addr: &AccountAddr,
+        stored: Option<&SignedAccountLog>,
+        log: &SignedAccountLog,
+    ) -> Result<Self, LezAccountRegError> {
+        let base = stored.map_or(ACCOUNT_LOG_DOMAIN, |stored| stored.payload.as_bytes());
+        let instruction = Instruction::Append(append_instruction(addr, base, log)?);
+        Ok(Self {
+            program,
+            account: account_registry_core::derive_lee_account_id(&program, &addr_bytes(addr)),
+            gas_limit: append_gas_limit(log.payload.as_bytes().len()),
+            addr: addr.clone(),
+            log: log.clone(),
+            instruction,
+            base: base.to_vec(),
+        })
+    }
+
+    /// The instruction data: the borsh-encoded `Append`.
+    #[must_use]
+    pub fn instruction_data(&self) -> Vec<u8> {
+        borsh::to_vec(&self.instruction).expect("borsh encoding into a Vec cannot fail")
+    }
+
+    fn selector(&self) -> ProgramShardSelector {
+        ProgramShardSelector::new(self.account, self.program)
+    }
+
+    /// Whether `stored`, the log now on chain, is the one this append writes. Fails with
+    /// [`LezAccountRegError::Conflict`] if it is neither that nor the log the append started from.
+    fn landed(&self, stored: Option<&SignedAccountLog>) -> Result<bool, LezAccountRegError> {
+        match stored {
+            Some(stored) if stored == &self.log => Ok(true),
+            Some(stored) if stored.payload.as_bytes() != self.base => {
+                Err(LezAccountRegError::Conflict)
+            }
+            _ => Ok(false),
+        }
     }
 }
 
@@ -235,16 +321,27 @@ fn addr_bytes(addr: &AccountAddr) -> [u8; 32] {
 }
 
 /// Polls `done` until it returns true, or gives up with [`LezAccountRegError::Timeout`].
-fn poll(
+fn poll(done: impl FnMut() -> Result<bool, LezAccountRegError>) -> Result<(), LezAccountRegError> {
+    poll_for(POLL_INTERVAL * POLL_ATTEMPTS, done)
+}
+
+/// Polls `done` until it returns true, at least once, or gives up after `timeout` with
+/// [`LezAccountRegError::Timeout`].
+fn poll_for(
+    timeout: Duration,
     mut done: impl FnMut() -> Result<bool, LezAccountRegError>,
 ) -> Result<(), LezAccountRegError> {
-    for _ in 0..POLL_ATTEMPTS {
+    let start = Instant::now();
+    loop {
         if done()? {
             return Ok(());
         }
-        thread::sleep(POLL_INTERVAL);
+        let left = timeout.saturating_sub(start.elapsed());
+        if left.is_zero() {
+            return Err(LezAccountRegError::Timeout);
+        }
+        thread::sleep(POLL_INTERVAL.min(left));
     }
-    Err(LezAccountRegError::Timeout)
 }
 
 #[cfg(test)]
@@ -344,6 +441,84 @@ mod tests {
             matches!(refused, Err(LezAccountRegError::NoPayer)),
             "{refused:?}"
         );
+    }
+
+    /// What a wallet is handed is the same write `publish` sends: only the new entries, under the
+    /// signature of the whole log, addressed to the log's account in the registry's shard.
+    #[test]
+    fn a_prepared_append_is_the_write_the_program_applies() {
+        let key = Ed25519SigningKey::generate();
+        let addr = AccountAddr::from(key.verifying_key());
+        let v1 = one_key_log();
+        let stored = sign(&key, &v1).unwrap();
+        let mut v2 = AccountLogDraft::from_log(&v1).unwrap();
+        v2.revoke(0).unwrap();
+        let log = sign(&key, v2.log()).unwrap();
+
+        let prepared = PreparedAppend::new(PROGRAM, &addr, Some(&stored), &log).unwrap();
+
+        assert_eq!(prepared.program, PROGRAM);
+        assert_eq!(prepared.account, registry().account_id(&addr));
+        assert_eq!(
+            prepared.gas_limit,
+            append_gas_limit(log.payload.as_bytes().len())
+        );
+        let Instruction::Append(update) = borsh::from_slice(&prepared.instruction_data()).unwrap();
+        assert_eq!(
+            update.entries,
+            log.payload.as_bytes()[stored.payload.as_bytes().len()..]
+        );
+        let written = account_registry_program::apply(update, &stored.to_bytes()).unwrap();
+        assert_eq!(written, log.to_bytes());
+
+        let fee = FeeDeclaration::new(PROGRAM, prepared.gas_limit, 0, 1);
+        let message = Message::try_new_with_fees(
+            prepared.program,
+            vec![prepared.selector()],
+            vec![],
+            &prepared.instruction,
+            fee,
+        )
+        .unwrap();
+        assert_eq!(message.instruction_data, prepared.instruction_data());
+    }
+
+    /// Waiting ends when the prepared log is on chain, goes on while the old one is, and reports
+    /// a conflict for anything else.
+    #[test]
+    fn a_prepared_append_lands_waits_or_conflicts() {
+        let key = Ed25519SigningKey::generate();
+        let addr = AccountAddr::from(key.verifying_key());
+        let v1 = one_key_log();
+        let stored = sign(&key, &v1).unwrap();
+        let mut v2 = AccountLogDraft::from_log(&v1).unwrap();
+        v2.revoke(0).unwrap();
+        let log = sign(&key, v2.log()).unwrap();
+        let other = sign(&key, &one_key_log()).unwrap();
+
+        let first = PreparedAppend::new(PROGRAM, &addr, None, &stored).unwrap();
+        assert!(!first.landed(None).unwrap());
+        assert!(first.landed(Some(&stored)).unwrap());
+
+        let second = PreparedAppend::new(PROGRAM, &addr, Some(&stored), &log).unwrap();
+        assert!(!second.landed(Some(&stored)).unwrap());
+        assert!(second.landed(Some(&log)).unwrap());
+        assert!(matches!(
+            second.landed(Some(&other)),
+            Err(LezAccountRegError::Conflict)
+        ));
+    }
+
+    /// The wait checks at least once, and gives up when the caller's time is over.
+    #[test]
+    fn waiting_stops_at_the_callers_timeout() {
+        let mut checks = 0;
+        let waited = poll_for(Duration::ZERO, || {
+            checks += 1;
+            Ok(false)
+        });
+        assert!(matches!(waited, Err(LezAccountRegError::Timeout)));
+        assert_eq!(checks, 1);
     }
 
     /// `rpc::LeeTransaction` must put exactly the bytes on the wire that LEZ's own type does.
