@@ -46,7 +46,7 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 - Writes need a funded payer (`with_payer`); reads do not.
 - `deploy(&header_key)` deploys through LEE's program loader: the guest's user ELF in 96 KiB segments, then a header at the program account. It creates the program, upgrades it in place if another mutable build is there, and does nothing if this build is. Deployments are mutable; the header key is the upgrade authority.
 - Segment accounts are PDAs of the program account seeded by the image ID and index, so a half-done deploy resumes. Anyone may write a segment, so an existing one is reused only if it holds exactly this build's bytes.
-- Defaults: poll every 1s up to 60 times, request timeout 30s.
+- Defaults: poll every 2s up to 150 times (5 minutes), request timeout 30s. The public testnet makes about one block a minute, sometimes slower, so a write takes a minute or two to land and a deploy several.
 - Blocking JSON-RPC to the sequencer (`getAccount`, `sendTransaction`). LEZ's own RPC client and transaction enum pull in tokio, so keep a local copy of the enum and test that it encodes exactly like LEZ's.
 - `LOCAL_PAYER_KEY` and `LOCAL_PROGRAM_KEY` are public keys for a local sequencer. The example uses them only against a local URL and otherwise requires keys from the environment.
 

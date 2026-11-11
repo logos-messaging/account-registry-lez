@@ -36,8 +36,8 @@ mod error;
 mod rpc;
 
 /// How often, and how many times, to look for a submitted transaction's effect.
-const POLL_INTERVAL: Duration = Duration::from_secs(1);
-const POLL_ATTEMPTS: u32 = 60;
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const POLL_ATTEMPTS: u32 = 150;
 
 /// Execution gas reserved for a program loader transaction, which runs natively and meters none.
 const LOADER_GAS_LIMIT: u64 = 1_000_000;
