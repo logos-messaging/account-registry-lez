@@ -8,6 +8,9 @@
 # protocol revision it was built for, and a hand-cloned upstream is one `git checkout` away from
 # silently disagreeing with the pin in Cargo.toml.
 #
+# Genesis funds the client's local payer (`LOCAL_PAYER_KEY` in account-registry-client), since
+# every write pays a fee and nothing can mint native balance once the chain is running.
+#
 # Usage: ./run-local-sequencer [extra sequencer args]
 
 set -euo pipefail
@@ -15,12 +18,23 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cargo_home=${CARGO_HOME:-$HOME/.cargo}
 
-# The pin in Cargo.toml is the single source of truth for which revision to run.
-rev=$(sed -n 's/.*logos-execution-zone", rev = "\([0-9a-f]\{7,\}\)".*/\1/p' \
-    "$repo_root/Cargo.toml" | head -1)
+# Must match `LOCAL_PAYER_ID` in account-registry-client/src/deploy.rs.
+local_payer=78Skt7EQTvVwfWVYnA1XMjghv3aUR1V5wgQAfVLKJZG5
+
+# Cargo.toml pins a tag; Cargo.lock records the commit it resolved to.
+tag=$(sed -n 's/.*logos-execution-zone", tag = "\([^"]*\)".*/\1/p' "$repo_root/Cargo.toml" | head -1)
+locked_rev() {
+    sed -n "s/.*logos-execution-zone?tag=${tag}#\([0-9a-f]\{7,\}\)\".*/\1/p" \
+        "$repo_root/Cargo.lock" 2>/dev/null | head -1
+}
+rev=$(locked_rev)
+if [[ -z $rev ]]; then
+    (cd "$repo_root" && cargo fetch)
+    rev=$(locked_rev)
+fi
 
 if [[ -z $rev ]]; then
-    echo "run-local-sequencer: no logos-execution-zone rev found in Cargo.toml" >&2
+    echo "run-local-sequencer: no logos-execution-zone revision found in Cargo.lock" >&2
     exit 1
 fi
 
@@ -61,9 +75,18 @@ export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$repo_root/target/sequencer}
 export RISC0_DEV_MODE=${RISC0_DEV_MODE:-1}
 export RUST_LOG=${RUST_LOG:-info}
 
-echo "Sequencer at ${rev:0:7}, binding :3040. Ctrl-C to stop." >&2
+mkdir -p "$CARGO_TARGET_DIR"
+config="$CARGO_TARGET_DIR/sequencer_config.json"
+python3 - "$service/configs/debug/sequencer_config.json" "$config" "$local_payer" <<'EOF'
+import json, sys
+source, target, payer = sys.argv[1:]
+config = json.load(open(source))
+config["genesis"].append({"supply_account": {"account_id": payer, "balance": 10**13}})
+json.dump(config, open(target, "w"), indent=2)
+EOF
 
-# The config path is relative to the service directory, which is why this runs from there.
+echo "Sequencer at ${rev:0:7}, binding :3040, local payer $local_payer funded. Ctrl-C to stop." >&2
+
+# The config's paths are relative to the service directory, which is why this runs from there.
 cd "$service"
-exec cargo run --release --features standalone -p sequencer_service -- \
-    configs/debug/sequencer_config.json "$@"
+exec cargo run --release --features standalone -p sequencer_service -- "$config" "$@"

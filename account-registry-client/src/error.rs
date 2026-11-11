@@ -18,6 +18,12 @@ pub enum LezAccountRegError {
     Unverified(AccountLogError),
     #[error("the log does not extend the one on chain; fetch and rebuild it")]
     NotAnExtension,
+    #[error("the log exceeds the registry's {0}-byte limit")]
+    TooLarge(usize),
+    #[error("writing needs a fee payer; see Registry::with_payer")]
+    NoPayer,
+    #[error("deploying the program: {0}")]
+    Deploy(String),
     #[error("another write landed first; fetch and rebuild the log")]
     Conflict,
     #[error("the transaction did not take effect in time")]

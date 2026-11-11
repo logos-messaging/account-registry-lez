@@ -9,10 +9,7 @@ use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use borsh::BorshSerialize;
-use lee::{
-    Account, AccountId, PrivacyPreservingTransaction, ProgramDeploymentTransaction,
-    PublicTransaction,
-};
+use lee::{Account, AccountId, PublicTransaction};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
@@ -21,17 +18,12 @@ use crate::LezAccountRegError;
 /// How long one request may take before it fails.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A copy of LEZ's `common::transaction::LeeTransaction`, whose crate pulls in tokio. Same
-/// variants in the same order, so the same borsh encoding: the variant's index, then its body.
+/// The part of LEZ's `common::transaction::LeeTransaction` the client sends; that crate pulls in
+/// tokio. `Public` is its first variant, so the borsh encoding is the same: the variant's index,
+/// then its body.
 #[derive(BorshSerialize)]
 pub(crate) enum LeeTransaction {
     Public(PublicTransaction),
-    #[allow(
-        dead_code,
-        reason = "never sent; listed so `ProgramDeployment` keeps index 2"
-    )]
-    PrivacyPreserving(PrivacyPreservingTransaction),
-    ProgramDeployment(ProgramDeploymentTransaction),
 }
 
 impl LeeTransaction {
