@@ -53,13 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: rustup toolchain install
-      - name: Install RISC Zero toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          curl -L https://risczero.com/install | bash
-          "$HOME/.risc0/bin/rzup" install
-          echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/install-risc0
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked --workspace
 
@@ -72,13 +66,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: rustup toolchain install
-      - name: Install RISC Zero toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          curl -L https://risczero.com/install | bash
-          "$HOME/.risc0/bin/rzup" install
-          echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/install-risc0
       - uses: Swatinem/rust-cache@v2
         with:
           key: sequencer
