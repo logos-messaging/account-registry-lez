@@ -55,7 +55,8 @@ at genesis.
 
 ```sh
 ./run-local-sequencer                                                     # LEZ sequencer at the pinned revision, on :3040
-cargo run -p account-registry-client --example account_publish            # deploy, publish, read back
+cargo run -p account-registry-client --example deploy                     # deploy the registry
+cargo run -p account-registry-client --example account_publish            # publish an account, read it back
 cargo test --workspace                                                    # includes the guest in the zkVM (a few minutes)
 cargo test -p account-registry-client -- --ignored against_a_sequencer    # against the running sequencer
 ```
@@ -77,11 +78,18 @@ makes a key and prints its account to fund):
 
 ```sh
 ACCOUNT_REGISTRY_PAYER=<payer key hex> ACCOUNT_REGISTRY_PROGRAM_KEY=<program key hex> \
-  cargo run -p account-registry-client --example account_publish https://testnet.lez.logos.co
+  cargo run -p account-registry-client --example deploy https://testnet.lez.logos.co
 ```
 
-Keep the program key: it is the only way to upgrade the deployment. LEZ's
-`wallet program-loader deploy` deploys the same ELF too.
+It prints the registry's address. Keep the program key: it is the only way to upgrade the
+deployment. LEZ's `wallet program-loader deploy` deploys the same ELF too.
+
+To publish a test account to a deployed registry and read it back:
+
+```sh
+ACCOUNT_REGISTRY_PAYER=<payer key hex> ACCOUNT_REGISTRY_PROGRAM=<registry address> \
+  cargo run -p account-registry-client --example account_publish https://testnet.lez.logos.co
+```
 
 ## Program ID
 
