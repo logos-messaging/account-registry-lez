@@ -53,15 +53,35 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: rustup toolchain install
-      - name: Install RISC Zero toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          curl -L https://risczero.com/install | bash
-          "$HOME/.risc0/bin/rzup" install
-          echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/install-risc0
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked --workspace
+
+  sequencer:
+    name: Sequencer Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TARGET_DIR_SEQUENCER: ${{ github.workspace }}/.sequencer-target
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: ./.github/actions/install-risc0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sequencer
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.CARGO_TARGET_DIR_SEQUENCER }}
+          key: sequencer-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+      - name: Start sequencer
+        run: |
+          CARGO_TARGET_DIR="$CARGO_TARGET_DIR_SEQUENCER" ./run-local-sequencer > sequencer.log 2>&1 &
+          curl -so /dev/null --retry-connrefused --retry 360 --retry-delay 10 http://127.0.0.1:3040 &
+          wait -n
+      - run: cargo test --locked -p account-registry-client -- --ignored against_a_sequencer
+      - if: failure()
+        run: tail -n 200 sequencer.log
 
   deny:
     name: Cargo Deny

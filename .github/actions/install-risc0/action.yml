@@ -1,0 +1,20 @@
+name: Install RISC Zero
+description: Installs the RISC Zero toolchain, with r0vm matching the risc0-zkvm crate.
+inputs:
+  version:
+    description: r0vm and cargo-risczero version; must share major.minor with risc0-zkvm in Cargo.lock.
+    default: "3.0.5"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        curl -L https://risczero.com/install | bash
+        rzup="$HOME/.risc0/bin/rzup"
+        "$rzup" install rust
+        "$rzup" install cpp
+        "$rzup" install r0vm "${{ inputs.version }}"
+        "$rzup" install cargo-risczero "${{ inputs.version }}"
+        echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
