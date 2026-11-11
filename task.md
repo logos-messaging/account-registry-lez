@@ -37,6 +37,7 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 - One transaction may execute at most 10M gas (`MAX_GAS_EXEC`), one gas per cycle summed over the plan and apply sessions. Measured on v0.3.2, an append costs about 3.3M cycles plus about 120 per byte of the resulting log, which the signature check hashes.
 - Logs are capped at 32 KiB (`MAX_LOG_PAYLOAD_BYTES`), below the spec's 128 KiB: an append to a 32 KiB log costs about 7.1M cycles, and appends stop fitting at about 55 KiB. v0.3.2 also caps a program's data in one account at 100 KiB. Removing the cap needs a change to what is signed and is out of scope here.
 - The client reserves `append_gas_limit(len)` = 4M + 130 per byte, capped at 10M. The guest tests run every append under that reserve, so a cost change that outgrows it fails them.
+- At the minimum base fee of 8, creating an account (two entries) cost 26.3M units, measured on a local v0.3.2 sequencer; an append to a 32 KiB log costs about 58M. The payer must hold the reserve, gas limit × base fee, while a write runs; the unused part is refunded.
 
 ### Client
 - `fetch` verifies the signature under the address asked about before returning, so an RPC node can withhold a log or serve an older one but cannot forge one. The client keeps no state: retaining logs and validating entries stay with the consumer.
@@ -53,6 +54,11 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 - The local sequencer (`./run-local-sequencer`) is built from the commit `Cargo.lock` resolves the LEZ tag to, never from a separate clone. Its genesis funds `LOCAL_PAYER_KEY`'s account, since no program can mint native balance once the chain runs.
 - The program ID is the header account the deployer chooses, and logs live at PDAs derived from it, so redeploying a new build under the same header keeps every log. The guest is its own workspace, so its `Cargo.lock` alone decides the image ID the header records.
 
+### Networks and migration
+- The client talks to any LEZ sequencer. The public testnet's is `https://testnet.lez.logos.co`; it takes POST only and sends no CORS headers.
+- Target the LEZ version the public testnet runs: v0.3.2 now, v0.4 once testnet moves to it at the end of November 2026. LEZ-version-specific code stays in the guest entry, transaction building and deploy, so a port leaves the rules in `program` untouched.
+- A network upgrade may start a new genesis. A log then moves by being appended, whole, to the empty account on the new deployment with its stored signature, which anyone holding the log can do.
+
 ### Project setup
 - Crates `account-registry-core` (wire types), `-program` (state transition), `-methods` (embedded guest), `-guest` (zkVM entry point), `-client`.
 - Rust edition 2024, toolchain pinned to upstream LEZ's (1.98.1 for v0.3.2), MIT/Apache-2.0 dual licence.
@@ -67,4 +73,14 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 - Client tests show a log is found and verified from the address alone, and that transactions encode exactly like LEZ's.
 - A round trip against a local sequencer (deploy, publish, extend, fetch) passes. It is ignored by default and runs in CI's sequencer job.
 
-Out of scope: async client, LEE-signer authorization of writes, validating entries on chain, logs over 32 KiB.
+Out of scope: async client, LEE-signer authorization of writes, validating entries on chain, logs over 32 KiB, and sponsored publishing: a relayer paying for other accounts' writes is a separate service built on the client.
+
+
+## Open Questions
+
+- Who holds the header key of the deployment apps depend on, and whether that one is mutable.
+- A full log can no longer revoke a key. Whether the client should stop accepting endorsements shortly before the cap, keeping room for revocations (7 bytes each).
+- Whether LEZ can raise the 10M-gas transaction cap, or the spec should sign a running digest so an append's cost stops growing with the log.
+- `deploy` replaces any other mutable build, including a newer one. Whether upgrading should be an explicit call.
+- Writes from several clones of one `Registry` read the payer's nonce independently, so concurrent writes collide. Whether to serialize writes per payer.
+- Segment addresses are predictable and need no authorization, so a squatter can block deploying a build at a program account, though not hijack it.
