@@ -10,5 +10,8 @@ use account_registry_client::{PrivateKey, signer_id};
 fn main() {
     let key = PrivateKey::new_os_random();
     println!("key:     {key}");
-    println!("account: {}", signer_id(&key));
+    let account = signer_id(&key);
+    println!("account: {account}");
+    let hex: String = account.value().iter().map(|b| format!("{b:02x}")).collect();
+    println!("as hex:  {hex}");
 }
