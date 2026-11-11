@@ -35,6 +35,7 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 ### Fees and limits
 - Every user public transaction on LEE v0.3 declares a fee, signed by its payer. A refused transaction still pays its full reserved gas, so the client checks everything the program would refuse before sending.
 - One transaction may execute at most 10M gas (`MAX_GAS_EXEC`), one gas per cycle summed over the plan and apply sessions. Measured on v0.3.2, an append costs about 3.3M cycles plus about 120 per byte of the resulting log, which the signature check hashes.
+- The same 10M is the cap on a whole block's execution gas, and the base fee rises while blocks run above 5M. One block therefore fits one to three appends, from every account on the zone together.
 - Logs are capped at 32 KiB (`MAX_LOG_PAYLOAD_BYTES`), below the spec's 128 KiB: an append to a 32 KiB log costs about 7.1M cycles, and appends stop fitting at about 55 KiB. v0.3.2 also caps a program's data in one account at 100 KiB. Removing the cap needs a change to what is signed and is out of scope here.
 - The client reserves `append_gas_limit(len)` = 4M + 130 per byte, capped at 10M. The guest tests run every append under that reserve, so a cost change that outgrows it fails them.
 - At the minimum base fee of 8, creating an account (two entries) cost 26.3M units, measured on a local v0.3.2 sequencer; an append to a 32 KiB log costs about 58M. The payer must hold the reserve, gas limit × base fee, while a write runs; the unused part is refunded.
@@ -81,6 +82,9 @@ Out of scope: async client, LEE-signer authorization of writes, validating entri
 - Who holds the header key of the deployment apps depend on, and whether that one is mutable.
 - A full log can no longer revoke a key. Whether the client should stop accepting endorsements shortly before the cap, keeping room for revocations (7 bytes each).
 - Whether LEZ can raise the 10M-gas transaction cap, or the spec should sign a running digest so an append's cost stops growing with the log.
+- Throughput: one to three appends per block for the whole zone, and sustained load raises the base fee past the client's fixed `max_fee` (sized for a base fee of 64). Whether that is enough for onboarding, and whether `max_fee` should follow the sequencer's fee state.
+- A retry sent while an earlier transaction from the same payer is still pending reuses its nonce and is dropped.
+- `publish` does not check that a program is deployed at the program account, so a wrong one only shows as a timeout.
 - `deploy` replaces any other mutable build, including a newer one. Whether upgrading should be an explicit call.
 - Writes from several clones of one `Registry` read the payer's nonce independently, so concurrent writes collide. Whether to serialize writes per payer.
 - Segment addresses are predictable and need no authorization, so a squatter can block deploying a build at a program account, though not hijack it.
