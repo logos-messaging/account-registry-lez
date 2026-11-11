@@ -50,7 +50,7 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 - Segment accounts are PDAs of the program account seeded by the image ID and index, so a half-done deploy resumes. Anyone may write a segment, so an existing one is reused only if it holds exactly this build's bytes.
 - Defaults: poll every 2s up to 150 times (5 minutes), request timeout 30s. The public testnet makes about one block a minute, sometimes slower, so a write takes a minute or two to land and a deploy several.
 - Blocking JSON-RPC to the sequencer (`getAccount`, `sendTransaction`). LEZ's own RPC client and transaction enum pull in tokio, so keep a local copy of the enum and test that it encodes exactly like LEZ's.
-- `LOCAL_PAYER_KEY` and `LOCAL_PROGRAM_KEY` are public keys for a local sequencer. The example uses them only against a local URL and otherwise requires keys from the environment.
+- `LOCAL_PAYER_KEY` and `LOCAL_PROGRAM_KEY` are public keys for a local sequencer. The examples use them only against a local URL and otherwise require keys from the environment. Deploying is its own example, so publishing a test account never replaces a deployed program.
 
 ### Versions and program ID
 - LEZ v0.3.2, the release the public testnet runs, pinned by tag for every LEZ crate, the guest's included, and one logos-chat revision. Bump each set together.

@@ -1,15 +1,16 @@
 //! A libchat `Account` backed by the registry: publish a display name and a chat signer, then
 //! fetch the log back by address alone and read the values out of it.
 //!
-//! Start a sequencer with `./run-local-sequencer`, then:
+//! Start a sequencer with `./run-local-sequencer` and deploy the registry with the `deploy`
+//! example, then:
 //!
 //! ```sh
 //! cargo run -p account-registry-client --example account_publish [SEQUENCER_URL]
 //! ```
 //!
-//! Against another network, set `ACCOUNT_REGISTRY_PAYER` to a funded payer's key and
-//! `ACCOUNT_REGISTRY_PROGRAM_KEY` to the program account's key (hex). Both default to public
-//! keys, which only a local sequencer accepts; its genesis funds the default payer.
+//! Against another network, set `ACCOUNT_REGISTRY_PAYER` to a funded payer's key (hex) and
+//! `ACCOUNT_REGISTRY_PROGRAM` to the registry's program account (base58). Both default to what
+//! the `deploy` example uses on a local sequencer, whose genesis funds the default payer.
 
 use account_log::{
     AccountAddr, AccountEntry, AccountLogDraft, Ed25519SigningKey, Ed25519VerifyingKey, EntryData,
@@ -18,25 +19,18 @@ use account_log::{
 use logos_account::{Account, ChatRead, ChatWrite, ProfileRead, ProfileWrite};
 
 use account_registry_client::{
-    LOCAL_PAYER_KEY, LOCAL_PROGRAM_KEY, PrivateKey, Registry, signer_id,
+    AccountId, LOCAL_PAYER_KEY, LOCAL_PROGRAM_KEY, PrivateKey, Registry, signer_id,
 };
 
 fn main() {
     let url = get_sequencer_url();
     let local = is_local(&url);
     let payer = key_from_env("ACCOUNT_REGISTRY_PAYER", local.then_some(LOCAL_PAYER_KEY));
-    let program = key_from_env(
-        "ACCOUNT_REGISTRY_PROGRAM_KEY",
-        local.then_some(LOCAL_PROGRAM_KEY),
-    );
-    println!(
-        "Deploying the registry at {} on {url}, unless it is already there...",
-        signer_id(&program)
-    );
-    let provider = Registry::connect(&url, signer_id(&program))
+    let program = program_from_env(local);
+    println!("Publishing to the registry at {program} on {url}...");
+    let provider = Registry::connect(&url, program)
         .expect("registry failed init")
         .with_payer(payer);
-    provider.deploy(&program).expect("deploy failed");
 
     let mut account = Account::new(provider.clone());
 
@@ -119,6 +113,17 @@ fn key_from_env(name: &str, default: Option<&str>) -> PrivateKey {
         .unwrap_or_else(|| panic!("set {name}: the default key is public, for local use only"));
     key.parse()
         .unwrap_or_else(|_| panic!("{name} is not a 64-character hex key"))
+}
+
+/// The registry in `ACCOUNT_REGISTRY_PROGRAM`, or the `deploy` example's local one.
+fn program_from_env(local: bool) -> AccountId {
+    match std::env::var("ACCOUNT_REGISTRY_PROGRAM") {
+        Ok(program) => program
+            .parse()
+            .expect("ACCOUNT_REGISTRY_PROGRAM is not a base58 account id"),
+        Err(_) if local => signer_id(&LOCAL_PROGRAM_KEY.parse().expect("a valid key")),
+        Err(_) => panic!("set ACCOUNT_REGISTRY_PROGRAM to the registry's program account"),
+    }
 }
 
 fn is_local(url: &str) -> bool {

@@ -41,3 +41,7 @@ deploy = [
 [[example]]
 name = "account_publish"
 required-features = ["deploy"]
+
+[[example]]
+name = "deploy"
+required-features = ["deploy"]
