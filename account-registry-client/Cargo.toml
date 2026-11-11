@@ -10,12 +10,7 @@ account-log.workspace = true
 lee.workspace = true
 logos-account.workspace = true
 account-registry-core.workspace = true
-account-registry-methods = { workspace = true, optional = true }
 base64.workspace = true
-lee_core.workspace = true
-program_loader_core = { workspace = true, optional = true }
-risc0-binfmt = { workspace = true, optional = true }
-risc0-zkos-v1compat = { workspace = true, optional = true }
 borsh = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -27,21 +22,3 @@ url.workspace = true
 account-registry-program.workspace = true
 # Only to check `rpc::LeeTransaction` encodes exactly like LEZ's own; it pulls in tokio.
 lez_common.workspace = true
-
-[features]
-default = ["deploy"]
-# Embeds the guest to deploy it, which builds it with the RISC Zero toolchain.
-deploy = [
-    "dep:account-registry-methods",
-    "dep:program_loader_core",
-    "dep:risc0-binfmt",
-    "dep:risc0-zkos-v1compat",
-]
-
-[[example]]
-name = "account_publish"
-required-features = ["deploy"]
-
-[[example]]
-name = "deploy"
-required-features = ["deploy"]
