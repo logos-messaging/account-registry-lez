@@ -9,10 +9,6 @@ on:
         options:
           - lez-testnet
         default: lez-testnet
-      ref:
-        description: What to deploy, a v* tag, a branch or a commit on main or release/*.
-        type: string
-        required: true
 
 concurrency:
   group: deploy-${{ inputs.network }}
@@ -23,8 +19,8 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy ${{ inputs.ref }} to ${{ inputs.network }}
-    if: github.ref == 'refs/heads/main'
+    name: Deploy ${{ github.ref_name }} to ${{ inputs.network }}
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: ${{ inputs.network }}
@@ -42,25 +38,6 @@ jobs:
             *) echo "unknown network: $NETWORK" >&2; exit 1 ;;
           esac
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          ref: ${{ inputs.ref }}
-          fetch-depth: 0
-      - name: Check the commit was reviewed
-        env:
-          REF: ${{ inputs.ref }}
-        run: |
-          commit=$(git rev-parse --verify "HEAD^{commit}")
-          echo "DEPLOY_COMMIT=$commit" >> "$GITHUB_ENV"
-          if git tag --points-at "$commit" | grep -q '^v'; then
-            exit 0
-          fi
-          for branch in $(git for-each-ref --format='%(refname)' refs/remotes/origin/main 'refs/remotes/origin/release/*'); do
-            if git merge-base --is-ancestor "$commit" "$branch"; then
-              exit 0
-            fi
-          done
-          echo "$REF ($commit) is not a v* tag and not on main or a release/* branch" >&2
-          exit 1
       - run: rustup toolchain install
       - uses: ./.github/actions/install-risc0
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -90,8 +67,6 @@ jobs:
           grep -q "^$SMOKE_ACCOUNT: .*signature valid" "$RUNNER_TEMP/smoke"
       - name: Summary
         if: always()
-        env:
-          REF: ${{ inputs.ref }}
         run: |
           {
             echo "### Registry on $SEQUENCER_URL"
@@ -100,6 +75,6 @@ jobs:
             echo "|---|---|"
             echo "| Address | \`${ACCOUNT_REGISTRY_PROGRAM:-not deployed}\` |"
             echo "| Version | \`${DEPLOY_VERSION:-unknown}\` |"
-            echo "| Deployed | \`$REF\` at \`${DEPLOY_COMMIT:-unknown}\` |"
+            echo "| Deployed | \`$GITHUB_REF_NAME\` at \`$GITHUB_SHA\` |"
             echo "| Smoke account | \`$SMOKE_ACCOUNT\` |"
           } >> "$GITHUB_STEP_SUMMARY"
