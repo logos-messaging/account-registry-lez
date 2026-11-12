@@ -1,0 +1,58 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: Network to deploy to; its GitHub environment holds the keys.
+        type: choice
+        options:
+          - testnet
+        default: testnet
+
+concurrency:
+  group: deploy-${{ inputs.network }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.network }}
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: ${{ inputs.network }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: ./.github/actions/install-risc0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: deploy
+      - name: Build the CLI and the guest
+        run: cargo build --locked -p account-registry-cli
+      - name: Select the network
+        env:
+          NETWORK: ${{ inputs.network }}
+        run: |
+          case "$NETWORK" in
+            testnet) echo "SEQUENCER_URL=https://testnet.lez.logos.co" >> "$GITHUB_ENV" ;;
+            *) echo "unknown network: $NETWORK" >&2; exit 1 ;;
+          esac
+      - name: Deploy
+        env:
+          ACCOUNT_REGISTRY_PAYER: ${{ secrets.ACCOUNT_REGISTRY_PAYER }}
+          ACCOUNT_REGISTRY_PROGRAM_KEY: ${{ secrets.ACCOUNT_REGISTRY_PROGRAM_KEY }}
+        run: |
+          target/debug/account-registry deploy --timeout 600 > "$RUNNER_TEMP/registry"
+          {
+            echo "### Registry on $SEQUENCER_URL"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Address | \`$(sed -n 's/^Registry deployed at //p' "$RUNNER_TEMP/registry")\` |"
+            echo "| Version | \`$(target/debug/account-registry --version)\` |"
+            echo "| Commit | \`$GITHUB_SHA\` ($GITHUB_REF_NAME) |"
+          } >> "$GITHUB_STEP_SUMMARY"
