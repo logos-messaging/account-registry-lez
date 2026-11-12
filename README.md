@@ -5,6 +5,14 @@ that stores [λAccountLogs](https://github.com/logos-messaging/libchat) on chain
 holding an account's address can find its log and verify it. Built for LEZ v0.3.2, the version
 the public testnet runs.
 
+## Deployments
+
+| Network | Sequencer | LEZ | Registry (program account) | Deployed |
+|---|---|---|---|---|
+| Public testnet | `https://testnet.lez.logos.co` | v0.3.2 | `BHNNfnhPMNMZ7N3oAtbu1iM1HkFyraWx2UjBvxhj8wTa` | `v0.3.0` |
+
+Clients take the registry by its program account, e.g. `ACCOUNT_REGISTRY_PROGRAM` for the CLI.
+
 ## How it works
 
 - Each address's log lives in the program's shard of a PDA seeded by the address. The shard's
