@@ -14,7 +14,7 @@ dependencies = [
 
 [[package]]
 name = "account-registry-core"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "borsh",
  "lee_core",
@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "account-registry-guest"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "account-registry-core",
  "account-registry-program",
@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "account-registry-program"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "account-log",
  "account-registry-core",
