@@ -2,7 +2,7 @@
 name = "account-registry-program"
 description = "The registry's state transition: append to an account's signed log."
 # The program version: core, program and the guest share it.
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 license.workspace = true
 

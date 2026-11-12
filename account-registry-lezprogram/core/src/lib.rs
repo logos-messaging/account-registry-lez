@@ -1,9 +1,8 @@
 //! The registry's wire types: what a client needs to build a write or find a log, without the
 //! program logic.
 //!
-//! The log of the account with Ed25519 address `addr` lives in this program's shard of a PDA
-//! seeded by `addr`, so anyone holding the address can find it. The shard's data is exactly the
-//! bytes libchat transmits, `SignedAccountLog::to_bytes()` (`signature ‖ payload`).
+//! The log of the account with Ed25519 address `addr` is this program's state on a PDA seeded
+//! by `addr`, so anyone holding the address can find it. The state is exactly the bytes libchat transmits, `SignedAccountLog::to_bytes()` (`signature ‖ payload`).
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{account::AccountId, program::PdaSeed};
@@ -19,11 +18,11 @@ pub const SIGNATURE_LEN: usize = 64;
 ///
 /// Below the AccountLog spec's 128 KiB: every write re-hashes the whole log, and an append to a
 /// log this size must still fit LEE's 10M-gas transaction cap, or the account could never be
-/// written again. Clients must check it before sending, since a refused write still pays.
+/// written again. LEE itself no longer limits a program's state. Clients must check it before sending, since a refused write still pays.
 pub const MAX_LOG_PAYLOAD_BYTES: usize = 32 * 1024;
 
-/// LEE's cap on one transaction's execution gas, one gas per cycle summed over the plan and
-/// apply sessions (`MAX_GAS_EXEC` in LEZ's fee crate).
+/// LEE's cap on one transaction's execution gas, one gas per cycle (`MAX_GAS_EXEC` in LEZ's fee
+/// crate).
 pub const MAX_GAS_EXEC: u64 = 10_000_000;
 
 /// Execution gas to reserve for an append resulting in a `payload_len`-byte log. Measured on LEE
@@ -56,8 +55,15 @@ pub struct LogUpdate {
     pub entries: Vec<u8>,
 }
 
+/// The seed of the PDA holding `addr`'s log. A first write to the account carries it, with the
+/// program account, as evidence that the account is public.
+#[must_use]
+pub const fn log_seed(addr: &[u8; ADDR_LEN]) -> PdaSeed {
+    PdaSeed::new(*addr)
+}
+
 /// The account holding `addr`'s log, for the registry deployed at `program`.
 #[must_use]
 pub fn derive_lee_account_id(program: &AccountId, addr: &[u8; ADDR_LEN]) -> AccountId {
-    AccountId::for_public_pda(program, &PdaSeed::new(*addr))
+    AccountId::for_public_pda(program, &log_seed(addr))
 }

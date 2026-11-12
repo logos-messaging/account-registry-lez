@@ -10,7 +10,7 @@ use std::{process::ExitCode, time::Duration};
 
 use account_log::{AccountAddr, AccountEntry, AccountLogDraft, EntryData, IndexedAccountEntry};
 use account_registry_client::{
-    AccountId, LezAccountRegError, PROGRAM_VERSION, PrivateKey, Registry, signer_id,
+    AccountId, LezAccountRegError, PROGRAM_VERSION, PrivateKey, PublicKey, Registry, signer_id,
 };
 use clap::{Parser, Subcommand};
 
@@ -47,7 +47,7 @@ enum Command {
     /// Print a new LEE key and the public account it signs for.
     ///
     /// Use one as a fee payer and another as the program account. The key is the secret; the
-    /// account is what others send funds to.
+    /// account is what others send funds to, and the public key is what a genesis config names.
     Keygen,
 
     /// Deploy this build of the registry, or upgrade the build already at the program account.
@@ -136,9 +136,10 @@ fn run(cli: Cli) -> Result<(), Error> {
         Command::Keygen => {
             let key = PrivateKey::new_os_random();
             let account = signer_id(&key);
-            println!("key:     {key}");
-            println!("account: {account}");
-            println!("as hex:  {}", hex(account.value()));
+            println!("key:        {key}");
+            println!("public key: {}", PublicKey::new_from_private_key(&key));
+            println!("account:    {account}");
+            println!("as hex:     {}", hex(account.value()));
         }
         Command::Deploy { timeout } => {
             let payer = key_from_env(PAYER_VAR, local.then_some(LOCAL_PAYER_KEY))?;
@@ -243,13 +244,15 @@ mod tests {
 
     use super::*;
 
-    /// `LOCAL_PAYER_KEY`'s account, as `./run-local-sequencer` names it in the genesis config.
-    const LOCAL_PAYER_ID: &str = "78Skt7EQTvVwfWVYnA1XMjghv3aUR1V5wgQAfVLKJZG5";
+    /// `LOCAL_PAYER_KEY`'s public key, as `./run-local-sequencer` names it in the genesis config.
+    const LOCAL_PAYER_PUBLIC_KEY: &str =
+        "4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa";
 
     #[test]
-    fn the_local_payer_id_matches_its_key() {
+    fn the_local_payer_public_key_matches_its_key() {
         let key: PrivateKey = LOCAL_PAYER_KEY.parse().unwrap();
-        assert_eq!(LOCAL_PAYER_ID, signer_id(&key).to_string());
+        let public = PublicKey::new_from_private_key(&key);
+        assert_eq!(LOCAL_PAYER_PUBLIC_KEY, public.to_string());
     }
 
     #[test]

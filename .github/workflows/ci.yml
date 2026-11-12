@@ -83,6 +83,8 @@ jobs:
         with:
           path: ${{ env.CARGO_TARGET_DIR_SEQUENCER }}
           key: sequencer-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+      - name: Install the sequencer's system libraries
+        run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
       - name: Start sequencer
         run: |
           CARGO_TARGET_DIR="$CARGO_TARGET_DIR_SEQUENCER" ./run-local-sequencer > sequencer.log 2>&1 &

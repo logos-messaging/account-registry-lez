@@ -17,28 +17,28 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 ## Decisions
 
 ### Storage
-- An address's log lives in the program's shard of a public PDA derived from the program account and seeded by the 32-byte address, so the address alone finds it.
-- The shard's data is the spec's signed log, byte for byte. An empty shard means nothing was published.
+- An address's log is the program's state on a public PDA derived from the program account and seeded by the 32-byte address, so the address alone finds it.
+- That state is the spec's signed log, byte for byte. An empty state means nothing was published.
 
 ### Instruction
 - One instruction, `Append(LogUpdate { addr, new_signature, entries })`, borsh-encoded. The variant index is the opcode, so new instructions go at the end.
 - `entries` holds only the new bytes. `new_signature` covers the whole resulting payload, which makes it a compare-and-swap: a write prepared against a log that has since moved on no longer verifies.
 
 ### Program
-- LEE v0.3 runs a program in two steps, and the guest is `run_program(plan, apply)`. `plan` sees the instruction and the accounts it names, never their data; `apply` sees the stored shard.
+- A LEE v0.4 program is an actor: the guest is `actor_entrypoint!(handle)`, and `handle` runs once per message, for the one account the message is addressed to, with that account's stored state.
 - A rejected write panics, which is how a LEE program refuses a transaction.
-- `plan` rejects anything but exactly one account, an account that is not `addr`'s PDA, a shard of another program, and empty `entries`. `apply` rejects a result over the size limit or not signed by `addr`.
-- A program writes only its own shard and needs no claim on the account.
+- `handle` rejects an account that is not `addr`'s PDA, empty `entries`, and a result over the size limit or not signed by `addr`.
+- A program writes only its own state and needs no claim on the account. A message to an account that does not exist yet must carry evidence that the account is public, here the program account and the PDA seed, so the client attaches it to every append.
 - Do not decode entries. Validating a log costs about 240k cycles per stored key, so re-validating on every write would exceed the gas cap after a few dozen keys and leave the account unwritable for good. A correctly signed log with invalid entries is therefore stored, and consumers reject it as the spec requires.
 - The logic is plain Rust, tested on the host. The zkVM guest only calls it.
 
 ### Fees and limits
-- Every user public transaction on LEE v0.3 declares a fee, signed by its payer. A refused transaction still pays its full reserved gas, so the client checks everything the program would refuse before sending.
-- One transaction may execute at most 10M gas (`MAX_GAS_EXEC`), one gas per cycle summed over the plan and apply sessions. Measured on v0.3.2, an append costs about 3.3M cycles plus about 120 per byte of the resulting log, which the signature check hashes.
+- Every user public transaction on LEE declares a fee, signed by its payer. A refused transaction still pays its full reserved gas, so the client checks everything the program would refuse before sending.
+- One transaction may execute at most 10M gas (`MAX_GAS_EXEC`), one gas per cycle. Measured on v0.4.0-rc3, as on v0.3.2, an append costs about 3.3M cycles plus about 120 per byte of the resulting log, which the signature check hashes.
 - The same 10M is the cap on a whole block's execution gas, and the base fee rises while blocks run above 5M. One block therefore fits one to three appends, from every account on the zone together.
-- Logs are capped at 32 KiB (`MAX_LOG_PAYLOAD_BYTES`), below the spec's 128 KiB: an append to a 32 KiB log costs about 7.1M cycles, and appends stop fitting at about 55 KiB. v0.3.2 also caps a program's data in one account at 100 KiB. Removing the cap needs a change to what is signed and is out of scope here.
+- Logs are capped at 32 KiB (`MAX_LOG_PAYLOAD_BYTES`), below the spec's 128 KiB: an append to a 32 KiB log costs about 7.1M cycles, and appends stop fitting at about 55 KiB. LEE v0.4 itself no longer limits a program's state. Removing the cap needs a change to what is signed and is out of scope here.
 - The client reserves `append_gas_limit(len)` = 4M + 130 per byte, capped at 10M. The guest tests run every append under that reserve, so a cost change that outgrows it fails them.
-- At the minimum base fee of 8, creating an account (two entries) cost 26.3M units, measured on a local v0.3.2 sequencer; an append to a 32 KiB log costs about 58M. The payer must hold the reserve, gas limit × base fee, while a write runs; the unused part is refunded.
+- At the minimum base fee of 8, creating an account (two entries) cost 26.3M units, measured on local v0.3.2 and v0.4.0-rc3 sequencers alike; an append to a 32 KiB log costs about 58M. The payer must hold the reserve, gas limit × base fee, while a write runs; the unused part is refunded.
 
 ### Client
 - `fetch` verifies the signature under the address asked about before returning, so an RPC node can withhold a log or serve an older one but cannot forge one. The client keeps no state: retaining logs and validating entries stay with the consumer.
@@ -53,14 +53,15 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 ### CLI
 - `account-registry` is the operator's tool, in its own crate so the client carries no argument parser and no guest: `keygen`, `deploy`, `fetch <addr>`, `balance [account]`.
 - `deploy` goes through LEE's program loader: the guest's user ELF in 96 KiB segments, then a header at the program account. It creates the program, upgrades it in place if another mutable build is there, and does nothing if this build is. Deployments are mutable; the header key is the upgrade authority.
-- Segment accounts are PDAs of the program account seeded by the image ID and index, so a half-done deploy resumes. Anyone may write a segment, so an existing one is reused only if it holds exactly this build's bytes.
+- The loader writes only to an account that signs. Each segment account's key is derived from the header key, the image ID and the index, so only the header key's holder can write a deployment's segments, and a half-done deploy resumes.
+- The loader charges one gas per byte of loader state it reads, at most the whole chain, so `deploy` reserves the user ELF's size plus a margin. A first deploy cost 9.3M units on a local v0.4.0-rc3 sequencer, against 3.5M on v0.3.2, where the loader charged nothing for execution.
 - `deploy` reports each transaction on stderr: its hash, the block it landed in and its cost to the payer, then the totals. A transaction in no block after `--timeout` (300 s) ends the run with what is already on chain and how to resume; one that is in a block without effect is reported as refused. Only the registry's address goes to stdout.
 - The Deploy workflow runs `deploy` from GitHub Actions, on manual dispatch. It deploys the ref it is started from, which must be `main`, a `release/*` branch or a `v*` tag; a ref without the workflow cannot be deployed with it. A build whose program version is not for the network's LEZ minor is refused before anything is sent. After deploying it reads one known account back, writing nothing. A network is a GitHub environment holding the two keys as secrets, exposed only to the deploy step; `lez-testnet` is the one network so far. Each transaction gets 10 minutes to land.
 - Keys come from the environment only (`ACCOUNT_REGISTRY_PAYER`, `ACCOUNT_REGISTRY_PROGRAM_KEY`), never from arguments. `.env.example` lists every variable; a filled-in `.env` is ignored by git and sourced by the operator, and the CLI does not read it itself. `LOCAL_PAYER_KEY` and `LOCAL_PROGRAM_KEY` are public keys for a local sequencer; the CLI and the example fall back to them only against a local URL.
 
 ### Versions and program ID
-- LEZ v0.3.2, the release the public testnet runs, pinned by tag for every LEZ crate, the guest's included, and one logos-chat revision. Bump each set together.
-- The local sequencer (`./run-local-sequencer`) is built from the commit `Cargo.lock` resolves the LEZ tag to, never from a separate clone. Its genesis funds `LOCAL_PAYER_KEY`'s account, since no program can mint native balance once the chain runs.
+- LEZ v0.4.0-rc3, the latest release candidate of the version the public testnet moves to, pinned by tag for every LEZ crate, the guest's included, and one logos-chat revision. Bump each set together.
+- The local sequencer (`./run-local-sequencer`) is built from the commit `Cargo.lock` resolves the LEZ tag to, never from a separate clone. Its genesis funds `LOCAL_PAYER_KEY`'s account, named there by its public key, since no program can mint native balance once the chain runs.
 - The program ID is the header account the deployer chooses, and logs live at PDAs derived from it, so redeploying a new build under the same header keeps every log. The guest is its own workspace, so its `Cargo.lock` alone decides the image ID the header records.
 
 ### Releases
@@ -72,13 +73,13 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 
 ### Networks and migration
 - The client talks to any LEZ sequencer. The public testnet's is `https://testnet.lez.logos.co`; it takes POST only and sends no CORS headers.
-- Target the LEZ version the public testnet runs: v0.3.2 now, v0.4 once testnet moves to it at the end of November 2026. LEZ-version-specific code stays in the guest entry, transaction building and deploy, so a port leaves the rules in `program` untouched.
-- A network upgrade may start a new genesis. A log then moves by being appended, whole, to the empty account on the new deployment with its stored signature, which anyone holding the log can do.
+- Target the LEZ version the public testnet runs next: v0.4, which it moves to at the end of November 2026. The v0.3.2 deployment on the current testnet was made from the commit before this port. LEZ-version-specific code stays in the guest entry, transaction building and deploy, so a port leaves the rules in `program` untouched.
+- v0.3 and v0.4 share no wire format, loader state or image ID, so nothing deployed on one carries to the other, and a network upgrade may start a new genesis. A log then moves by being appended, whole, to the empty account on the new deployment with its stored signature, which anyone holding the log can do.
 
 ### Project setup
 - Crates `account-registry-core` (wire types), `-program` (state transition), `-methods` (embedded guest), `-guest` (zkVM entry point), `-client`, `-cli`.
-- Rust edition 2024, toolchain pinned to upstream LEZ's (1.98.1 for v0.3.2), MIT/Apache-2.0 dual licence.
-- Dependencies: `account-log`, `account`, `lee`, `lee_core`, `program_loader_core`, `risc0-zkvm`, `risc0-build`, `risc0-binfmt`, `risc0-zkos-v1compat`, `borsh`, `clap`, `ureq`, `url`, `serde`, `serde_json`, `base64`, `thiserror`.
+- Rust edition 2024, toolchain pinned to upstream LEZ's (1.98.1 for v0.4.0-rc3), MIT/Apache-2.0 dual licence.
+- Dependencies: `account-log`, `account`, `lee`, `lee_core`, `program_loader_core`, `risc0-zkvm`, `risc0-build`, `risc0-binfmt`, `risc0-zkos-v1compat`, `borsh`, `clap`, `sha2`, `ureq`, `url`, `serde`, `serde_json`, `base64`, `thiserror`.
 
 
 ## Done Criteria
@@ -102,4 +103,3 @@ Out of scope: async client, LEE-signer authorization of writes, validating entri
 - `publish` does not check that a program is deployed at the program account, so a wrong one only shows as a timeout.
 - `deploy` replaces any other mutable build, including a newer one. Whether upgrading should be an explicit call.
 - Writes from several clones of one `Registry` read the payer's nonce independently, so concurrent writes collide. Whether to serialize writes per payer.
-- Segment addresses are predictable and need no authorization, so a squatter can block deploying a build at a program account, though not hijack it.
