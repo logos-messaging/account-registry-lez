@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "account-registry-cli"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "account-log",
  "account-registry-client",
@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "account-registry-client"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "account",
  "account-log",
@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "account-registry-core"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "borsh",
  "lee_core",
@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "account-registry-methods"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "account-log",
  "account-registry-core",
@@ -79,7 +79,7 @@ dependencies = [
 
 [[package]]
 name = "account-registry-program"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "account-log",
  "account-registry-core",

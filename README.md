@@ -110,6 +110,17 @@ cargo run -p account-registry-client --example account_publish "$SEQUENCER_URL"
 account-registry fetch <account address, hex>
 ```
 
+## Versions
+
+The version follows LEZ's: registry `0.3.x` is built for LEZ v0.3 and `0.4.x` for LEZ v0.4, and
+a build runs on no other LEZ version. `main` follows the newest LEZ version the registry is ported to;
+`release/v<minor>` branches carry fixes for a version a network still runs. Deployed commits are
+tagged `v<version>`.
+
+The crates compiled into the guest carry a program version of their own, which moves only when
+the program does, so a release of the client or the CLI leaves the image ID, and the deployment,
+alone. `account-registry --version` prints both.
+
 ## Program ID
 
 `ACCOUNT_REGISTRY_ID` is the hash of the guest binary, and the program loader records it in the

@@ -1,6 +1,7 @@
 [package]
 name = "account-registry-guest"
-version = "0.1.0"
+# The program version: core, program and the guest share it.
+version = "0.3.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 

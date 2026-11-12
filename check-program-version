@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#
+# The crates compiled into the guest share one program version, and it moves when they change:
+# a crate's version is part of the image, so the image ID follows it.
+
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+program=account-registry-lezprogram
+manifests=("$program/core/Cargo.toml" "$program/program/Cargo.toml" "$program/methods/guest/Cargo.toml")
+
+version_of() {
+    sed -n '/^version = "\(.*\)"$/{s//\1/p;q;}'
+}
+
+version=$(version_of < "${manifests[0]}")
+for manifest in "${manifests[@]}"; do
+    found=$(version_of < "$manifest")
+    if [[ -z $found || $found != "$version" ]]; then
+        echo "check-program-version: $manifest is at '${found}', ${manifests[0]} at '$version'" >&2
+        exit 1
+    fi
+done
+
+if [[ -z $(git tag --list 'v*') ]]; then
+    exit 0
+fi
+if ! tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null); then
+    echo "check-program-version: no release tag is reachable; is the checkout shallow?" >&2
+    exit 1
+fi
+
+inputs=(
+    "$program/core"
+    "$program/program"
+    "$program/methods/guest"
+    "$program/methods/build.rs"
+    ":(exclude)$program/program/src/tests.rs"
+)
+if git diff --quiet "$tag" -- "${inputs[@]}"; then
+    exit 0
+fi
+released=$(git show "$tag:${manifests[0]}" | version_of)
+newest=$(printf '%s\n' "$released" "$version" | sort -V | tail -1)
+if [[ $released == "$version" || $newest != "$version" ]]; then
+    echo "check-program-version: the program changed since $tag ($released) but is at $version" >&2
+    exit 1
+fi

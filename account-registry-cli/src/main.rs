@@ -9,7 +9,9 @@
 use std::{process::ExitCode, time::Duration};
 
 use account_log::{AccountAddr, AccountEntry, AccountLogDraft, EntryData, IndexedAccountEntry};
-use account_registry_client::{AccountId, LezAccountRegError, PrivateKey, Registry, signer_id};
+use account_registry_client::{
+    AccountId, LezAccountRegError, PROGRAM_VERSION, PrivateKey, Registry, signer_id,
+};
 use clap::{Parser, Subcommand};
 
 mod deploy;
@@ -25,7 +27,7 @@ const PAYER_VAR: &str = "ACCOUNT_REGISTRY_PAYER";
 const PROGRAM_KEY_VAR: &str = "ACCOUNT_REGISTRY_PROGRAM_KEY";
 
 #[derive(Parser)]
-#[command(name = "account-registry", version, about)]
+#[command(name = "account-registry", version = version(), about)]
 struct Cli {
     /// The sequencer's JSON-RPC URL.
     #[arg(
@@ -110,6 +112,11 @@ enum Error {
         tx: String,
         block: u64,
     },
+}
+
+/// The release version and the version of the program this build deploys.
+fn version() -> &'static str {
+    format!("{} (program {PROGRAM_VERSION})", env!("CARGO_PKG_VERSION")).leak()
 }
 
 fn main() -> ExitCode {
