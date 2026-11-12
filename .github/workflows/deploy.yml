@@ -1,0 +1,80 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: Network to deploy to; its GitHub environment holds the keys.
+        type: choice
+        options:
+          - lez-testnet
+        default: lez-testnet
+
+concurrency:
+  group: deploy-${{ inputs.network }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy ${{ github.ref_name }} to ${{ inputs.network }}
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: ${{ inputs.network }}
+    steps:
+      - name: Select the network
+        env:
+          NETWORK: ${{ inputs.network }}
+        run: |
+          case "$NETWORK" in
+            lez-testnet)
+              echo "SEQUENCER_URL=https://testnet.lez.logos.co" >> "$GITHUB_ENV"
+              echo "LEZ_MINOR=0.3" >> "$GITHUB_ENV"
+              echo "SMOKE_ACCOUNT=2ff71b3fe5d192bd6273a95f8b2b89de6ac52a78553f21b54cf832314b2670d6" >> "$GITHUB_ENV"
+              ;;
+            *) echo "unknown network: $NETWORK" >&2; exit 1 ;;
+          esac
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - run: rustup toolchain install
+      - uses: ./.github/actions/install-risc0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: deploy
+      - name: Build the CLI and the guest
+        run: cargo build --locked -p account-registry-cli
+      - name: Check the build is for this network's LEZ version
+        run: |
+          version=$(target/debug/account-registry --version)
+          echo "DEPLOY_VERSION=$version" >> "$GITHUB_ENV"
+          case "$version" in
+            *"(program $LEZ_MINOR."*) ;;
+            *) echo "$version is not a build for LEZ $LEZ_MINOR" >&2; exit 1 ;;
+          esac
+      - name: Deploy
+        env:
+          ACCOUNT_REGISTRY_PAYER: ${{ secrets.ACCOUNT_REGISTRY_PAYER }}
+          ACCOUNT_REGISTRY_PROGRAM_KEY: ${{ secrets.ACCOUNT_REGISTRY_PROGRAM_KEY }}
+        run: |
+          target/debug/account-registry deploy --timeout 600 > "$RUNNER_TEMP/deployed"
+          program=$(sed -n 's/^Registry deployed at //p' "$RUNNER_TEMP/deployed")
+          echo "ACCOUNT_REGISTRY_PROGRAM=$program" >> "$GITHUB_ENV"
+      - name: Check a known account still reads back
+        run: |
+          target/debug/account-registry fetch "$SMOKE_ACCOUNT" | tee "$RUNNER_TEMP/smoke"
+          grep -q "^$SMOKE_ACCOUNT: .*signature valid" "$RUNNER_TEMP/smoke"
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Registry on $SEQUENCER_URL"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Address | \`${ACCOUNT_REGISTRY_PROGRAM:-not deployed}\` |"
+            echo "| Version | \`${DEPLOY_VERSION:-unknown}\` |"
+            echo "| Deployed | \`$GITHUB_REF_NAME\` at \`$GITHUB_SHA\` |"
+            echo "| Smoke account | \`$SMOKE_ACCOUNT\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

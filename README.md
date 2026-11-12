@@ -97,10 +97,22 @@ reports every one on stderr: its hash, the block it landed in, and what it cost 
 transaction is in no block after `--timeout` seconds (300 by default), it says how far it got;
 running it again resumes from there.
 
-The one line on stdout is the registry's address; put it in `.env` as `ACCOUNT_REGISTRY_PROGRAM`. Keep the
+The one line on stdout, `Registry deployed at <address>`, gives the address; put it in `.env` as `ACCOUNT_REGISTRY_PROGRAM`. Keep the
 program key: it is the only way to upgrade the deployment. Without the two keys the CLI uses
 public ones, and only against a local sequencer. LEZ's `wallet program-loader deploy` deploys the
 same ELF too.
+
+### From CI
+
+The **Deploy** workflow does the same from GitHub Actions, on a manual run only: Actions →
+Deploy → Run workflow. "Use workflow from" picks what is deployed: `main`, a `release/*`
+branch or a `v*` tag that contains the workflow. Each network is a GitHub environment
+of the same name holding two secrets, `ACCOUNT_REGISTRY_PAYER` and `ACCOUNT_REGISTRY_PROGRAM_KEY`;
+only `lez-testnet` exists so far. Each transaction gets ten minutes to land, and the run's summary
+gives the registry's address, the version deployed and the commit. A build for another LEZ
+version than the network's is refused before anything is sent, and after deploying the run reads
+one known account back. A build made in CI has its own
+image ID, so the first CI run upgrades a deployment made from another machine.
 
 To publish a test account to a deployed registry, and read any account's log back:
 
