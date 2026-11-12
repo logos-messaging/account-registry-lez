@@ -109,7 +109,8 @@ The **Deploy** workflow does the same from GitHub Actions, on a manual run only:
 Deploy → Run workflow. "Use workflow from" picks what is deployed: `main`, a `release/*`
 branch or a `v*` tag that contains the workflow. Each network is a GitHub environment
 of the same name holding two secrets, `ACCOUNT_REGISTRY_PAYER` and `ACCOUNT_REGISTRY_PROGRAM_KEY`;
-only `lez-testnet` exists so far. Each transaction gets ten minutes to land, and the run's summary
+the networks are `lez-testnet` (LEZ v0.3) and `lez-devnet` (LEZ v0.4). `lez-devnet` also holds
+its sequencer's URL, as the secret `SEQUENCER_URL`. Each transaction gets ten minutes to land, and the run's summary
 gives the registry's address, the version deployed and the commit. A build for another LEZ
 version than the network's is refused before anything is sent, and after deploying the run reads
 one known account back. A build made in CI has its own
