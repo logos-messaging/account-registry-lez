@@ -1,8 +1,8 @@
-//! The two sequencer calls the client makes, as blocking JSON-RPC 2.0 over HTTP.
+//! The sequencer calls the client makes, as blocking JSON-RPC 2.0 over HTTP.
 //!
 //! LEZ's own client (`sequencer_service_rpc`) is async and needs tokio, so this speaks its wire
 //! format directly. The method names, positional parameters and encodings below must match its
-//! `Rpc` trait at the pinned revision. Bump them together; the ignored `against_a_sequencer` test
+//! `Rpc` trait at the pinned revision. Bump them together; the CLI crate's ignored `against_a_sequencer` test
 //! checks them end to end.
 
 use std::time::Duration;
@@ -55,10 +55,34 @@ impl Sequencer {
         self.call("getAccount", (account_id,))
     }
 
-    /// Returns once the sequencer has accepted `tx`, not once it is in a block.
-    pub(crate) fn send_transaction(&self, tx: &LeeTransaction) -> Result<(), LezAccountRegError> {
-        let _hash: Value = self.call("sendTransaction", (tx.to_base64(),))?;
-        Ok(())
+    /// The account's native balance, in the zone's smallest unit.
+    pub(crate) fn get_account_balance(
+        &self,
+        account_id: AccountId,
+    ) -> Result<u128, LezAccountRegError> {
+        self.call("getAccountBalance", (account_id,))
+    }
+
+    /// The hash of `tx`, once the sequencer has accepted it, not once it is in a block.
+    pub(crate) fn send_transaction(
+        &self,
+        tx: &LeeTransaction,
+    ) -> Result<String, LezAccountRegError> {
+        self.call("sendTransaction", (tx.to_base64(),))
+    }
+
+    /// The height of the latest block.
+    pub(crate) fn get_last_block_id(&self) -> Result<u64, LezAccountRegError> {
+        self.call("getLastBlockId", ())
+    }
+
+    /// The block holding the transaction with hash `tx`, if it is in one.
+    pub(crate) fn get_transaction_block(
+        &self,
+        tx: &str,
+    ) -> Result<Option<u64>, LezAccountRegError> {
+        let found: Option<(Value, u64)> = self.call("getTransaction", (tx,))?;
+        Ok(found.map(|(_, block)| block))
     }
 
     fn call<R: DeserializeOwned>(

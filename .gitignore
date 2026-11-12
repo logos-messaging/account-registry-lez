@@ -4,3 +4,8 @@ target/
 
 # Local overrides, e.g. patching account-log to a sibling libchat checkout.
 /.cargo/config.toml
+
+# Keys for the CLI; see .env.example.
+.env
+.env.*
+!.env.example

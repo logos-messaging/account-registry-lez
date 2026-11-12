@@ -27,14 +27,13 @@ the public testnet runs.
 | `account-registry-program` | `account-registry-lezprogram/program` | The state transition, as plain Rust and unit tested on the host |
 | `account-registry-methods` | `account-registry-lezprogram/methods` | The program compiled for the zkVM: `ACCOUNT_REGISTRY_ELF` and `ACCOUNT_REGISTRY_ID` |
 | `account-registry-guest` | `account-registry-lezprogram/methods/guest` | The zkVM entry point. Its own workspace, so its `Cargo.lock` alone decides what goes into the image |
-| `account-registry-client` | `account-registry-client` | Blocking JSON-RPC client (no async runtime) implementing libchat's `AccountProvider` and `AccountPublisher` |
+| `account-registry-client` | `account-registry-client` | Blocking JSON-RPC client (no async runtime) implementing libchat's `AccountProvider` and `AccountPublisher`. Does not link the guest |
+| `account-registry-cli` | `account-registry-cli` | The `account-registry` binary: `keygen`, `deploy`, `fetch`, `balance` |
 
 ## Usage
 
 ```rust
-let registry = Registry::connect("http://localhost:3040", signer_id(&program_key))?
-    .with_payer(payer_key);
-registry.deploy(&program_key)?; // does nothing if this build is already deployed
+let registry = Registry::connect("http://localhost:3040", program)?.with_payer(payer_key);
 
 let mut account = Account::new(registry.clone());
 account.update().set_display_name("Saro").publish()?;
@@ -43,7 +42,7 @@ let log = registry.fetch(&account.addr())?.expect("published").verify(&account.a
 assert_eq!(log.display_name(), Some("Saro"));
 ```
 
-Use libchat's `account` crate at the revision this repo pins, or `account-log` types won't match.
+`program` is the registry's address, which `account-registry deploy` prints. Use libchat's `account` crate at the revision this repo pins, or `account-log` types won't match.
 [`examples/account_publish.rs`](account-registry-client/examples/account_publish.rs) is the full
 version.
 
@@ -54,11 +53,12 @@ build the guest, and `python3` for `run-local-sequencer`, which funds the client
 at genesis.
 
 ```sh
-./run-local-sequencer                                                     # LEZ sequencer at the pinned revision, on :3040
-cargo run -p account-registry-client --example deploy                     # deploy the registry
-cargo run -p account-registry-client --example account_publish            # publish an account, read it back
-cargo test --workspace                                                    # includes the guest in the zkVM (a few minutes)
-cargo test -p account-registry-client -- --ignored against_a_sequencer    # against the running sequencer
+./run-local-sequencer                                                  # LEZ sequencer at the pinned revision, on :3040
+cargo run -p account-registry-cli -- deploy                            # deploy the registry
+cargo run -p account-registry-client --example account_publish         # publish an account, read it back
+cargo run -p account-registry-cli -- fetch <ADDR>                      # print the log the example published
+cargo test --workspace                                                 # includes the guest in the zkVM (a few minutes)
+cargo test -p account-registry-cli -- --ignored against_a_sequencer    # against the running sequencer
 ```
 
 The local sequencer runs with `RISC0_DEV_MODE=1`, which skips proof verification. Its state
@@ -69,26 +69,45 @@ over.
 
 LEE deploys a program through its program loader: the guest's ELF goes up in segments, then a
 header at an account the deployer chooses points at them. That header account is the program's
-address, and logs live at PDAs derived from it. `Registry::deploy` does all of it, paid by the
-payer, and leaves the program upgradable by the header key: deploying a new build with the same
+address, and logs live at PDAs derived from it. `account-registry deploy` does all of it, paid by
+the payer, and leaves the program upgradable by the header key: deploying a new build with the same
 key replaces the code and keeps every log. A new header key gives a separate, empty registry.
 
-Against the testnet, with a funded payer (`cargo run -p account-registry-client --example keygen`
-makes a key and prints its account to fund):
+The CLI reads keys from the environment only, never from arguments, so they stay out of shell
+history. Keep them in a `.env` file, which git ignores, and edit it in an editor rather than
+typing a key into a command:
 
 ```sh
-ACCOUNT_REGISTRY_PAYER=<payer key hex> ACCOUNT_REGISTRY_PROGRAM_KEY=<program key hex> \
-  cargo run -p account-registry-client --example deploy https://testnet.lez.logos.co
+cargo install --path account-registry-cli    # or: cargo run -p account-registry-cli -- <command>
+account-registry keygen                      # twice: a payer and a program key
+cp .env.example .env && chmod 600 .env       # then fill in the two keys
+source .env
 ```
 
-It prints the registry's address. Keep the program key: it is the only way to upgrade the
-deployment. LEZ's `wallet program-loader deploy` deploys the same ELF too.
-
-To publish a test account to a deployed registry and read it back:
+`.env` holds the keys in plain text, so use it for test networks only, one file per network.
+Against the testnet, once the payer's account is funded:
 
 ```sh
-ACCOUNT_REGISTRY_PAYER=<payer key hex> ACCOUNT_REGISTRY_PROGRAM=<registry address> \
-  cargo run -p account-registry-client --example account_publish https://testnet.lez.logos.co
+account-registry balance    # the payer's
+account-registry deploy
+```
+
+`deploy` sends one transaction per segment and one for the header, each waiting for a block. It
+reports every one on stderr: its hash, the block it landed in, and what it cost the payer. If a
+transaction is in no block after `--timeout` seconds (300 by default), it says how far it got;
+running it again resumes from there.
+
+The one line on stdout is the registry's address; put it in `.env` as `ACCOUNT_REGISTRY_PROGRAM`. Keep the
+program key: it is the only way to upgrade the deployment. Without the two keys the CLI uses
+public ones, and only against a local sequencer. LEZ's `wallet program-loader deploy` deploys the
+same ELF too.
+
+To publish a test account to a deployed registry, and read any account's log back:
+
+```sh
+source .env
+cargo run -p account-registry-client --example account_publish "$SEQUENCER_URL"
+account-registry fetch <account address, hex>
 ```
 
 ## Program ID
