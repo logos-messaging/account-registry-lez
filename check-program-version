@@ -10,7 +10,7 @@ program=account-registry-lezprogram
 manifests=("$program/core/Cargo.toml" "$program/program/Cargo.toml" "$program/methods/guest/Cargo.toml")
 
 version_of() {
-    sed -n 's/^version = "\(.*\)"$/\1/p' | head -1
+    sed -n '/^version = "\(.*\)"$/{s//\1/p;q;}'
 }
 
 version=$(version_of < "${manifests[0]}")
@@ -22,13 +22,27 @@ for manifest in "${manifests[@]}"; do
     fi
 done
 
-tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null) || exit 0
-inputs=("$program/core" "$program/program" "$program/methods/guest" rust-toolchain.toml)
+if [[ -z $(git tag --list 'v*') ]]; then
+    exit 0
+fi
+if ! tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null); then
+    echo "check-program-version: no release tag is reachable; is the checkout shallow?" >&2
+    exit 1
+fi
+
+inputs=(
+    "$program/core"
+    "$program/program"
+    "$program/methods/guest"
+    "$program/methods/build.rs"
+    ":(exclude)$program/program/src/tests.rs"
+)
 if git diff --quiet "$tag" -- "${inputs[@]}"; then
     exit 0
 fi
 released=$(git show "$tag:${manifests[0]}" | version_of)
-if [[ $released == "$version" ]]; then
-    echo "check-program-version: the program changed since $tag but is still $version" >&2
+newest=$(printf '%s\n' "$released" "$version" | sort -V | tail -1)
+if [[ $released == "$version" || $newest != "$version" ]]; then
+    echo "check-program-version: the program changed since $tag ($released) but is at $version" >&2
     exit 1
 fi

@@ -12,7 +12,7 @@ use account_log::{AccountAddr, AccountEntry, AccountLogDraft, EntryData, Indexed
 use account_registry_client::{
     AccountId, LezAccountRegError, PROGRAM_VERSION, PrivateKey, Registry, signer_id,
 };
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 
 mod deploy;
 mod progress;
@@ -27,7 +27,7 @@ const PAYER_VAR: &str = "ACCOUNT_REGISTRY_PAYER";
 const PROGRAM_KEY_VAR: &str = "ACCOUNT_REGISTRY_PROGRAM_KEY";
 
 #[derive(Parser)]
-#[command(name = "account-registry", version, about)]
+#[command(name = "account-registry", version = version(), about)]
 struct Cli {
     /// The sequencer's JSON-RPC URL.
     #[arg(
@@ -114,12 +114,13 @@ enum Error {
     },
 }
 
+/// The release version and the version of the program this build deploys.
+fn version() -> &'static str {
+    format!("{} (program {PROGRAM_VERSION})", env!("CARGO_PKG_VERSION")).leak()
+}
+
 fn main() -> ExitCode {
-    let version = format!("{} (program {PROGRAM_VERSION})", env!("CARGO_PKG_VERSION"));
-    let version: &'static str = version.leak();
-    let matches = Cli::command().version(version).get_matches();
-    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
-    match run(cli) {
+    match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");
