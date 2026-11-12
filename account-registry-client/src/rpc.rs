@@ -63,10 +63,26 @@ impl Sequencer {
         self.call("getAccountBalance", (account_id,))
     }
 
-    /// Returns once the sequencer has accepted `tx`, not once it is in a block.
-    pub(crate) fn send_transaction(&self, tx: &LeeTransaction) -> Result<(), LezAccountRegError> {
-        let _hash: Value = self.call("sendTransaction", (tx.to_base64(),))?;
-        Ok(())
+    /// The hash of `tx`, once the sequencer has accepted it, not once it is in a block.
+    pub(crate) fn send_transaction(
+        &self,
+        tx: &LeeTransaction,
+    ) -> Result<String, LezAccountRegError> {
+        self.call("sendTransaction", (tx.to_base64(),))
+    }
+
+    /// The height of the latest block.
+    pub(crate) fn get_last_block_id(&self) -> Result<u64, LezAccountRegError> {
+        self.call("getLastBlockId", ())
+    }
+
+    /// The block holding the transaction with hash `tx`, if it is in one.
+    pub(crate) fn get_transaction_block(
+        &self,
+        tx: &str,
+    ) -> Result<Option<u64>, LezAccountRegError> {
+        let found: Option<(Value, u64)> = self.call("getTransaction", (tx,))?;
+        Ok(found.map(|(_, block)| block))
     }
 
     fn call<R: DeserializeOwned>(

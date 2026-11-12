@@ -92,7 +92,12 @@ account-registry balance    # the payer's
 account-registry deploy
 ```
 
-It prints the registry's address; put it in `.env` as `ACCOUNT_REGISTRY_PROGRAM`. Keep the
+`deploy` sends one transaction per segment and one for the header, each waiting for a block. It
+reports every one on stderr: its hash, the block it landed in, and what it cost the payer. If a
+transaction is in no block after `--timeout` seconds (300 by default), it says how far it got;
+running it again resumes from there.
+
+The one line on stdout is the registry's address; put it in `.env` as `ACCOUNT_REGISTRY_PROGRAM`. Keep the
 program key: it is the only way to upgrade the deployment. Without the two keys the CLI uses
 public ones, and only against a local sequencer. LEZ's `wallet program-loader deploy` deploys the
 same ELF too.

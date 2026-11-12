@@ -6,13 +6,14 @@
 //! listings: `ACCOUNT_REGISTRY_PAYER` pays the fees, `ACCOUNT_REGISTRY_PROGRAM_KEY` signs for the
 //! program account. Against a local sequencer both default to public keys.
 
-use std::{process::ExitCode, thread, time::Duration};
+use std::{process::ExitCode, time::Duration};
 
 use account_log::{AccountAddr, AccountEntry, AccountLogDraft, EntryData, IndexedAccountEntry};
 use account_registry_client::{AccountId, LezAccountRegError, PrivateKey, Registry, signer_id};
 use clap::{Parser, Subcommand};
 
 mod deploy;
+mod progress;
 
 /// The payer `./run-local-sequencer` funds at genesis. Never use it on a real network.
 const LOCAL_PAYER_KEY: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -22,10 +23,6 @@ const LOCAL_PROGRAM_KEY: &str = "22222222222222222222222222222222222222222222222
 
 const PAYER_VAR: &str = "ACCOUNT_REGISTRY_PAYER";
 const PROGRAM_KEY_VAR: &str = "ACCOUNT_REGISTRY_PROGRAM_KEY";
-
-/// How often, and how many times, to look for a submitted transaction's effect.
-const WAIT_INTERVAL: Duration = Duration::from_secs(2);
-const WAIT_ATTEMPTS: u32 = 150;
 
 #[derive(Parser)]
 #[command(name = "account-registry", version, about)]
@@ -55,8 +52,13 @@ enum Command {
     ///
     /// Signs with ACCOUNT_REGISTRY_PROGRAM_KEY, whose account becomes the registry's address,
     /// and pays with ACCOUNT_REGISTRY_PAYER. Does nothing if this build is already deployed, and
-    /// resumes a deploy that stopped half way.
-    Deploy,
+    /// resumes a deploy that stopped half way. Progress goes to stderr; the registry's address
+    /// is the one line on stdout.
+    Deploy {
+        /// Seconds to wait for each transaction to land in a block.
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+    },
 
     /// Print an account's log, after checking that the address signed it.
     Fetch {
@@ -87,6 +89,27 @@ enum Error {
     InvalidKey(&'static str),
     #[error("pass --program or set ACCOUNT_REGISTRY_PROGRAM: the registry's program account")]
     MissingProgram,
+    #[error(
+        "{what}: tx {tx} was accepted but is in no block after {waited} (height {from} to {to}).\n  \
+         {done} of {steps} steps are on chain, and nothing is lost: run the command again to \
+         resume.\n  Wait a minute first, so the retry cannot collide with this transaction if it \
+         is still pending."
+    )]
+    NotIncluded {
+        what: String,
+        tx: String,
+        waited: String,
+        from: u64,
+        to: u64,
+        done: usize,
+        steps: usize,
+    },
+    #[error("{what}: tx {tx} is in block {block} but did not take effect; LEE refused it")]
+    Refused {
+        what: String,
+        tx: String,
+        block: u64,
+    },
 }
 
 fn main() -> ExitCode {
@@ -110,13 +133,14 @@ fn run(cli: Cli) -> Result<(), Error> {
             println!("account: {account}");
             println!("as hex:  {}", hex(account.value()));
         }
-        Command::Deploy => {
+        Command::Deploy { timeout } => {
             let payer = key_from_env(PAYER_VAR, local.then_some(LOCAL_PAYER_KEY))?;
             let header = key_from_env(PROGRAM_KEY_VAR, local.then_some(LOCAL_PROGRAM_KEY))?;
             let program = signer_id(&header);
-            println!("Deploying the registry at {program} on {url}, unless it is already there...");
+            let payer_id = signer_id(&payer);
+            eprintln!("Deploying the registry at {program} on {url}");
             let registry = Registry::connect(&url, program)?.with_payer(payer);
-            deploy::deploy(&registry, &header)?;
+            deploy::deploy(&registry, &header, payer_id, Duration::from_secs(timeout))?;
             println!("Registry deployed at {program}");
         }
         Command::Fetch { addr, program } => {
@@ -205,17 +229,6 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Polls `landed` until it returns true, or gives up with [`LezAccountRegError::Timeout`].
-fn wait(mut landed: impl FnMut() -> Result<bool, Error>) -> Result<(), Error> {
-    for _ in 0..WAIT_ATTEMPTS {
-        if landed()? {
-            return Ok(());
-        }
-        thread::sleep(WAIT_INTERVAL);
-    }
-    Err(LezAccountRegError::Timeout.into())
-}
-
 #[cfg(test)]
 mod tests {
     use account_log::{AccountLog, Context, Ed25519SigningKey};
@@ -249,12 +262,14 @@ mod tests {
     fn against_a_sequencer() {
         let url = std::env::var("SEQUENCER_URL").unwrap_or("http://localhost:3040".into());
         let payer = key_from_env(PAYER_VAR, Some(LOCAL_PAYER_KEY)).unwrap();
+        let payer_id = signer_id(&payer);
         let header = PrivateKey::new_os_random();
         let registry = Registry::connect(&url, signer_id(&header))
             .unwrap()
             .with_payer(payer);
-        deploy::deploy(&registry, &header).unwrap();
-        deploy::deploy(&registry, &header).unwrap();
+        let timeout = Duration::from_secs(300);
+        deploy::deploy(&registry, &header, payer_id, timeout).unwrap();
+        deploy::deploy(&registry, &header, payer_id, timeout).unwrap();
 
         let key = Ed25519SigningKey::generate();
         let addr = AccountAddr::from(key.verifying_key());

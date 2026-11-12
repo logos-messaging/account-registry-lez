@@ -28,6 +28,7 @@ fn main() {
     let url = get_sequencer_url();
     let local = is_local(&url);
     let payer = key_from_env("ACCOUNT_REGISTRY_PAYER", local.then_some(LOCAL_PAYER_KEY));
+    let payer_id = signer_id(&payer);
     let program = program_from_env(local);
     println!("Publishing to the registry at {program} on {url}...");
     let provider = Registry::connect(&url, program)
@@ -44,12 +45,20 @@ fn main() {
 
     {
         // Publish new AccountLog
+        let balance = provider.balance(payer_id).expect("balance failed");
+        let started = std::time::Instant::now();
+        println!("Waiting for a block, a minute or two on the testnet...");
         let slog = account
             .update()
             .set_display_name("Saro")
             .endorse_chat_signer(&Ed25519SigningKey::generate().verifying_key())
             .publish()
             .unwrap();
+        let cost = balance - provider.balance(payer_id).expect("balance failed");
+        println!(
+            "Published in {}s, cost {cost} units",
+            started.elapsed().as_secs()
+        );
         pretty_print(&slog, &account.addr());
     }
 

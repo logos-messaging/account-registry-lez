@@ -108,7 +108,7 @@ impl Registry {
         log: &SignedAccountLog,
     ) -> Result<(), LezAccountRegError> {
         let prepared = self.prepare_append(addr, log)?;
-        self.send(
+        let _tx = self.send(
             prepared.program,
             vec![prepared.selector()],
             &[],
@@ -155,9 +155,20 @@ impl Registry {
         self.rpc.get_account_balance(id)
     }
 
+    /// The height of the zone's latest block.
+    pub fn last_block(&self) -> Result<u64, LezAccountRegError> {
+        self.rpc.get_last_block_id()
+    }
+
+    /// The block holding the transaction with hash `tx`, as [`Registry::send`] returned it, or
+    /// `None` while it is in no block.
+    pub fn transaction_block(&self, tx: &str) -> Result<Option<u64>, LezAccountRegError> {
+        self.rpc.get_transaction_block(tx)
+    }
+
     /// Sends a transaction to `program` over `selectors`, signed by `signers` and paid by the
     /// configured payer, each at its current nonce, reserving `gas_limit` execution gas. Returns
-    /// once the sequencer accepts it, not once it is in a block.
+    /// the transaction's hash once the sequencer accepts it, not once it is in a block.
     pub fn send(
         &self,
         program: AccountId,
@@ -165,7 +176,7 @@ impl Registry {
         signers: &[&PrivateKey],
         instruction: impl BorshSerialize,
         gas_limit: u64,
-    ) -> Result<(), LezAccountRegError> {
+    ) -> Result<String, LezAccountRegError> {
         let payer = self.payer.as_ref().ok_or(LezAccountRegError::NoPayer)?;
         let mut keys = signers.to_vec();
         if !keys.iter().any(|key| signer_id(key) == signer_id(payer)) {

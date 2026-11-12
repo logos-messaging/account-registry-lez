@@ -46,7 +46,7 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 - Writes need a funded payer (`with_payer`); reads do not.
 - An app that pays through its own wallet uses `prepare_append`, which returns the program, the log's account, the gas limit and the encoded `Append` without sending, then `await_append(&prepared, timeout)` once its wallet accepted the transaction. The prepared append remembers its address and log, so it cannot be awaited against another account. `publish` is the two with the configured payer in between, waiting `PUBLISH_TIMEOUT`.
 - Defaults: poll every 2s up to 150 times (5 minutes), request timeout 30s. The public testnet makes about one block a minute, sometimes slower, so a write takes a minute or two to land and a deploy several.
-- Blocking JSON-RPC to the sequencer (`getAccount`, `getAccountBalance`, `sendTransaction`). LEZ's own RPC client and transaction enum pull in tokio, so keep a local copy of the enum and test that it encodes exactly like LEZ's.
+- Blocking JSON-RPC to the sequencer (`getAccount`, `getAccountBalance`, `sendTransaction`, `getTransaction`, `getLastBlockId`). `send` returns the transaction's hash. LEZ's own RPC client and transaction enum pull in tokio, so keep a local copy of the enum and test that it encodes exactly like LEZ's.
 - The client does not link the guest, so an application depending on it builds without the RISC Zero toolchain. It exposes `send`, `account` and `balance` for callers that build other transactions, which is all deploying needs from it.
 - The one example, `account_publish`, publishes a test account and never deploys.
 
@@ -54,6 +54,7 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 - `account-registry` is the operator's tool, in its own crate so the client carries no argument parser and no guest: `keygen`, `deploy`, `fetch <addr>`, `balance [account]`.
 - `deploy` goes through LEE's program loader: the guest's user ELF in 96 KiB segments, then a header at the program account. It creates the program, upgrades it in place if another mutable build is there, and does nothing if this build is. Deployments are mutable; the header key is the upgrade authority.
 - Segment accounts are PDAs of the program account seeded by the image ID and index, so a half-done deploy resumes. Anyone may write a segment, so an existing one is reused only if it holds exactly this build's bytes.
+- `deploy` reports each transaction on stderr: its hash, the block it landed in and its cost to the payer, then the totals. A transaction in no block after `--timeout` (300 s) ends the run with what is already on chain and how to resume; one that is in a block without effect is reported as refused. Only the registry's address goes to stdout.
 - Keys come from the environment only (`ACCOUNT_REGISTRY_PAYER`, `ACCOUNT_REGISTRY_PROGRAM_KEY`), never from arguments. `.env.example` lists every variable; a filled-in `.env` is ignored by git and sourced by the operator, and the CLI does not read it itself. `LOCAL_PAYER_KEY` and `LOCAL_PROGRAM_KEY` are public keys for a local sequencer; the CLI and the example fall back to them only against a local URL.
 
 ### Versions and program ID
