@@ -8,6 +8,10 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{account::AccountId, program::PdaSeed};
 
+/// The version of the program this build of the crates compiled into the guest makes. It moves
+/// only when the program does, so a release that leaves it alone leaves the image ID alone.
+pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub const ADDR_LEN: usize = 32;
 pub const SIGNATURE_LEN: usize = 64;
 

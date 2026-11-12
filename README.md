@@ -117,6 +117,10 @@ a build runs on no other LEZ version. `main` follows the newest LEZ version the 
 `release/v<minor>` branches carry fixes for a version a network still runs. Deployed commits are
 tagged `v<version>`.
 
+The crates compiled into the guest carry a program version of their own, which moves only when
+the program does, so a release of the client or the CLI leaves the image ID, and the deployment,
+alone. `account-registry --version` prints both.
+
 ## Program ID
 
 `ACCOUNT_REGISTRY_ID` is the hash of the guest binary, and the program loader records it in the

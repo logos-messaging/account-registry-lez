@@ -20,6 +20,15 @@ env:
   GUEST_MANIFEST: account-registry-lezprogram/methods/guest/Cargo.toml
 
 jobs:
+  versions:
+    name: Program Version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - run: ./check-program-version
+
   fmt:
     name: Format
     runs-on: ubuntu-latest

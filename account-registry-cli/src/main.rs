@@ -9,8 +9,10 @@
 use std::{process::ExitCode, time::Duration};
 
 use account_log::{AccountAddr, AccountEntry, AccountLogDraft, EntryData, IndexedAccountEntry};
-use account_registry_client::{AccountId, LezAccountRegError, PrivateKey, Registry, signer_id};
-use clap::{Parser, Subcommand};
+use account_registry_client::{
+    AccountId, LezAccountRegError, PROGRAM_VERSION, PrivateKey, Registry, signer_id,
+};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 mod deploy;
 mod progress;
@@ -113,7 +115,11 @@ enum Error {
 }
 
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
+    let version = format!("{} (program {PROGRAM_VERSION})", env!("CARGO_PKG_VERSION"));
+    let version: &'static str = version.leak();
+    let matches = Cli::command().version(version).get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");

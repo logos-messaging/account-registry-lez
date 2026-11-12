@@ -1,6 +1,6 @@
 [package]
 name = "account-registry-guest"
-# Follows the root workspace's version.
+# The program version, shared by the crates compiled into the guest: core, program and the guest.
 version = "0.3.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"

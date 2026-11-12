@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+#
+# The crates compiled into the guest share one program version, and it moves when they change:
+# a crate's version is part of the image, so the image ID follows it.
+
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+program=account-registry-lezprogram
+manifests=("$program/core/Cargo.toml" "$program/program/Cargo.toml" "$program/methods/guest/Cargo.toml")
+
+version_of() {
+    sed -n 's/^version = "\(.*\)"$/\1/p' | head -1
+}
+
+version=$(version_of < "${manifests[0]}")
+for manifest in "${manifests[@]}"; do
+    found=$(version_of < "$manifest")
+    if [[ -z $found || $found != "$version" ]]; then
+        echo "check-program-version: $manifest is at '${found}', ${manifests[0]} at '$version'" >&2
+        exit 1
+    fi
+done
+
+tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null) || exit 0
+inputs=("$program/core" "$program/program" "$program/methods/guest" rust-toolchain.toml)
+if git diff --quiet "$tag" -- "${inputs[@]}"; then
+    exit 0
+fi
+released=$(git show "$tag:${manifests[0]}" | version_of)
+if [[ $released == "$version" ]]; then
+    echo "check-program-version: the program changed since $tag but is still $version" >&2
+    exit 1
+fi
