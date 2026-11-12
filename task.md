@@ -64,7 +64,8 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 
 ### Releases
 - The version follows LEZ's: registry `0.<minor>.x` is built for LEZ `0.<minor>` and runs on no other, since LEZ versions share no program model or transaction format. The patch number is this repo's own.
-- `main` is the line for the LEZ version the public testnet runs next. A commit that is deployed or released is tagged `v<version>`, e.g. `v0.3.0`.
+- The version is compiled into the guest, so every release, a patch included, has a new image ID, and deploying it upgrades the program on chain even where the program's code is unchanged.
+- `main` follows the newest LEZ version the registry is ported to. A commit that is deployed or released is tagged `v<version>`, e.g. `v0.3.0`.
 - When `main` moves to the next LEZ version while a network still runs the previous one, a `release/v<minor>` branch is cut from the last tag of that line, e.g. `release/v0.3`, and deleted once no network runs it.
 - A fix goes to `main` first and is cherry-picked to a release branch only if that network needs it. A fix to code that exists only on the old line goes to the release branch alone.
 

@@ -113,7 +113,7 @@ account-registry fetch <account address, hex>
 ## Versions
 
 The version follows LEZ's: registry `0.3.x` is built for LEZ v0.3 and `0.4.x` for LEZ v0.4, and
-a build runs on no other LEZ version. `main` targets the version the public testnet runs next;
+a build runs on no other LEZ version. `main` follows the newest LEZ version the registry is ported to;
 `release/v<minor>` branches carry fixes for a version a network still runs. Deployed commits are
 tagged `v<version>`.
 

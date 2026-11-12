@@ -1,7 +1,5 @@
 [graph]
 all-features = true
-# Audit what ships. Tests link LEZ's `common`, and with it libp2p and a DNS stack the client
-# never does.
 exclude-dev = true
 
 [advisories]
