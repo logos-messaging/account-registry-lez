@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "account-registry-cli"
-version = "0.4.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "account-log",
  "account-registry-client",
@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "account-registry-client"
-version = "0.4.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "account",
  "account-log",
@@ -67,7 +67,7 @@ dependencies = [
 
 [[package]]
 name = "account-registry-methods"
-version = "0.4.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "account-log",
  "account-registry-core",

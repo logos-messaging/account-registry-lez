@@ -67,6 +67,7 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 ### Releases
 - The version follows LEZ's: registry `0.<minor>.x` is built for LEZ `0.<minor>` and runs on no other, since LEZ versions share no program model or transaction format. The patch number is this repo's own.
 - The crates compiled into the guest, `core`, `program` and the guest itself, share a program version of their own, written out in their manifests. A crate's version is part of the image, so it moves only when the program, its dependencies or the LEZ pin change: a release of the client or the CLI alone keeps the image ID, and `deploy` from it does nothing. CI checks the three agree, and that they moved if those crates changed since the last tag.
+- A release candidate carries its pre-release only in the release version, e.g. release `0.4.0-rc.1` with program `0.4.0`, so promoting a candidate to the release keeps the image ID.
 - `main` follows the newest LEZ version the registry is ported to. A commit that is deployed or released is tagged `v<version>`, e.g. `v0.3.0`.
 - When `main` moves to the next LEZ version while a network still runs the previous one, a `release/v<minor>` branch is cut from the last tag of that line, e.g. `release/v0.3`, and deleted once no network runs it.
 - A fix goes to `main` first and is cherry-picked to a release branch only if that network needs it. A fix to code that exists only on the old line goes to the release branch alone.

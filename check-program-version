@@ -13,6 +13,20 @@ version_of() {
     sed -n '/^version = "\(.*\)"$/{s//\1/p;q;}'
 }
 
+# Whether version $1 comes after $2. A pre-release such as 0.4.0-rc.1 comes before 0.4.0.
+newer() {
+    local a_core=${1%%-*} b_core=${2%%-*}
+    if [[ $a_core != "$b_core" ]]; then
+        [[ $(printf '%s\n' "$a_core" "$b_core" | sort -V | tail -1) == "$a_core" ]]
+    elif [[ $1 == "$a_core" ]]; then
+        [[ $2 != "$b_core" ]]
+    elif [[ $2 == "$b_core" ]]; then
+        return 1
+    else
+        [[ $(printf '%s\n' "$1" "$2" | sort -V | tail -1) == "$1" ]]
+    fi
+}
+
 version=$(version_of < "${manifests[0]}")
 for manifest in "${manifests[@]}"; do
     found=$(version_of < "$manifest")
@@ -41,8 +55,7 @@ if git diff --quiet "$tag" -- "${inputs[@]}"; then
     exit 0
 fi
 released=$(git show "$tag:${manifests[0]}" | version_of)
-newest=$(printf '%s\n' "$released" "$version" | sort -V | tail -1)
-if [[ $released == "$version" || $newest != "$version" ]]; then
+if [[ $released == "$version" ]] || ! newer "$version" "$released"; then
     echo "check-program-version: the program changed since $tag ($released) but is at $version" >&2
     exit 1
 fi
