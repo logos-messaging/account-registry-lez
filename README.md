@@ -73,27 +73,35 @@ address, and logs live at PDAs derived from it. `account-registry deploy` does a
 the payer, and leaves the program upgradable by the header key: deploying a new build with the same
 key replaces the code and keeps every log. A new header key gives a separate, empty registry.
 
-The CLI reads keys from the environment only. Against the testnet, with a funded payer
-(`account-registry keygen` makes a key and prints its account to fund):
+The CLI reads keys from the environment only, never from arguments, so they stay out of shell
+history. Keep them in a `.env` file, which git ignores, and edit it in an editor rather than
+typing a key into a command:
 
 ```sh
 cargo install --path account-registry-cli    # or: cargo run -p account-registry-cli -- <command>
-export SEQUENCER_URL=https://testnet.lez.logos.co
-export ACCOUNT_REGISTRY_PAYER=<payer key hex>
-export ACCOUNT_REGISTRY_PROGRAM_KEY=<program key hex>
+account-registry keygen                      # twice: a payer and a program key
+cp .env.example .env && chmod 600 .env       # then fill in the two keys
+source .env
+```
+
+`.env` holds the keys in plain text, so use it for test networks only, one file per network.
+Against the testnet, once the payer's account is funded:
+
+```sh
 account-registry balance    # the payer's
 account-registry deploy
 ```
 
-It prints the registry's address. Keep the program key: it is the only way to upgrade the
-deployment. Without the two variables the CLI uses public keys, and only against a local
-sequencer. LEZ's `wallet program-loader deploy` deploys the same ELF too.
+It prints the registry's address; put it in `.env` as `ACCOUNT_REGISTRY_PROGRAM`. Keep the
+program key: it is the only way to upgrade the deployment. Without the two keys the CLI uses
+public ones, and only against a local sequencer. LEZ's `wallet program-loader deploy` deploys the
+same ELF too.
 
 To publish a test account to a deployed registry, and read any account's log back:
 
 ```sh
-export ACCOUNT_REGISTRY_PROGRAM=<registry address>
-cargo run -p account-registry-client --example account_publish https://testnet.lez.logos.co
+source .env
+cargo run -p account-registry-client --example account_publish "$SEQUENCER_URL"
 account-registry fetch <account address, hex>
 ```
 

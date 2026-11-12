@@ -54,7 +54,7 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 - `account-registry` is the operator's tool, in its own crate so the client carries no argument parser and no guest: `keygen`, `deploy`, `fetch <addr>`, `balance [account]`.
 - `deploy` goes through LEE's program loader: the guest's user ELF in 96 KiB segments, then a header at the program account. It creates the program, upgrades it in place if another mutable build is there, and does nothing if this build is. Deployments are mutable; the header key is the upgrade authority.
 - Segment accounts are PDAs of the program account seeded by the image ID and index, so a half-done deploy resumes. Anyone may write a segment, so an existing one is reused only if it holds exactly this build's bytes.
-- Keys come from the environment only (`ACCOUNT_REGISTRY_PAYER`, `ACCOUNT_REGISTRY_PROGRAM_KEY`), never from arguments. `LOCAL_PAYER_KEY` and `LOCAL_PROGRAM_KEY` are public keys for a local sequencer; the CLI and the example fall back to them only against a local URL.
+- Keys come from the environment only (`ACCOUNT_REGISTRY_PAYER`, `ACCOUNT_REGISTRY_PROGRAM_KEY`), never from arguments. `.env.example` lists every variable; a filled-in `.env` is ignored by git and sourced by the operator, and the CLI does not read it itself. `LOCAL_PAYER_KEY` and `LOCAL_PROGRAM_KEY` are public keys for a local sequencer; the CLI and the example fall back to them only against a local URL.
 
 ### Versions and program ID
 - LEZ v0.3.2, the release the public testnet runs, pinned by tag for every LEZ crate, the guest's included, and one logos-chat revision. Bump each set together.

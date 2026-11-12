@@ -181,12 +181,14 @@ fn print_log(addr: &AccountAddr, stored: &account_log::SignedAccountLog) -> Resu
     Ok(())
 }
 
-/// The key in the variable `name`, or `default` if it is unset. With no default, it is required.
+/// The key in the variable `name`, or `default` if it is unset or empty, as in a `.env` not yet
+/// filled in. With no default, it is required.
 fn key_from_env(name: &'static str, default: Option<&str>) -> Result<PrivateKey, Error> {
-    match (std::env::var(name), default) {
-        (Ok(key), _) => parse_key(name, &key),
-        (Err(_), Some(key)) => parse_key(name, key),
-        (Err(_), None) => Err(Error::MissingKey(name)),
+    let set = std::env::var(name).ok().filter(|key| !key.is_empty());
+    match (set, default) {
+        (Some(key), _) => parse_key(name, &key),
+        (None, Some(key)) => parse_key(name, key),
+        (None, None) => Err(Error::MissingKey(name)),
     }
 }
 
