@@ -7,8 +7,12 @@ on:
         description: Network to deploy to; its GitHub environment holds the keys.
         type: choice
         options:
-          - testnet
-        default: testnet
+          - lez-testnet
+        default: lez-testnet
+      ref:
+        description: What to deploy, a v* tag, a branch or a commit on main or release/*.
+        type: string
+        required: true
 
 concurrency:
   group: deploy-${{ inputs.network }}
@@ -19,40 +23,83 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy to ${{ inputs.network }}
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
+    name: Deploy ${{ inputs.ref }} to ${{ inputs.network }}
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: ${{ inputs.network }}
     steps:
-      - uses: actions/checkout@v5
-      - run: rustup toolchain install
-      - uses: ./.github/actions/install-risc0
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: deploy
-      - name: Build the CLI and the guest
-        run: cargo build --locked -p account-registry-cli
       - name: Select the network
         env:
           NETWORK: ${{ inputs.network }}
         run: |
           case "$NETWORK" in
-            testnet) echo "SEQUENCER_URL=https://testnet.lez.logos.co" >> "$GITHUB_ENV" ;;
+            lez-testnet)
+              echo "SEQUENCER_URL=https://testnet.lez.logos.co" >> "$GITHUB_ENV"
+              echo "LEZ_MINOR=0.3" >> "$GITHUB_ENV"
+              echo "SMOKE_ACCOUNT=2ff71b3fe5d192bd6273a95f8b2b89de6ac52a78553f21b54cf832314b2670d6" >> "$GITHUB_ENV"
+              ;;
             *) echo "unknown network: $NETWORK" >&2; exit 1 ;;
+          esac
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - name: Check the commit was reviewed
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          commit=$(git rev-parse --verify "HEAD^{commit}")
+          echo "DEPLOY_COMMIT=$commit" >> "$GITHUB_ENV"
+          if git tag --points-at "$commit" | grep -q '^v'; then
+            exit 0
+          fi
+          for branch in $(git for-each-ref --format='%(refname)' refs/remotes/origin/main 'refs/remotes/origin/release/*'); do
+            if git merge-base --is-ancestor "$commit" "$branch"; then
+              exit 0
+            fi
+          done
+          echo "$REF ($commit) is not a v* tag and not on main or a release/* branch" >&2
+          exit 1
+      - run: rustup toolchain install
+      - uses: ./.github/actions/install-risc0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: deploy
+      - name: Build the CLI and the guest
+        run: cargo build --locked -p account-registry-cli
+      - name: Check the build is for this network's LEZ version
+        run: |
+          version=$(target/debug/account-registry --version)
+          echo "DEPLOY_VERSION=$version" >> "$GITHUB_ENV"
+          case "$version" in
+            *"(program $LEZ_MINOR."*) ;;
+            *) echo "$version is not a build for LEZ $LEZ_MINOR" >&2; exit 1 ;;
           esac
       - name: Deploy
         env:
           ACCOUNT_REGISTRY_PAYER: ${{ secrets.ACCOUNT_REGISTRY_PAYER }}
           ACCOUNT_REGISTRY_PROGRAM_KEY: ${{ secrets.ACCOUNT_REGISTRY_PROGRAM_KEY }}
         run: |
-          target/debug/account-registry deploy --timeout 600 > "$RUNNER_TEMP/registry"
+          target/debug/account-registry deploy --timeout 600 > "$RUNNER_TEMP/deployed"
+          program=$(sed -n 's/^Registry deployed at //p' "$RUNNER_TEMP/deployed")
+          echo "ACCOUNT_REGISTRY_PROGRAM=$program" >> "$GITHUB_ENV"
+      - name: Check a known account still reads back
+        run: |
+          target/debug/account-registry fetch "$SMOKE_ACCOUNT" | tee "$RUNNER_TEMP/smoke"
+          grep -q "^$SMOKE_ACCOUNT: .*signature valid" "$RUNNER_TEMP/smoke"
+      - name: Summary
+        if: always()
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
           {
             echo "### Registry on $SEQUENCER_URL"
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| Address | \`$(sed -n 's/^Registry deployed at //p' "$RUNNER_TEMP/registry")\` |"
-            echo "| Version | \`$(target/debug/account-registry --version)\` |"
-            echo "| Commit | \`$GITHUB_SHA\` ($GITHUB_REF_NAME) |"
+            echo "| Address | \`${ACCOUNT_REGISTRY_PROGRAM:-not deployed}\` |"
+            echo "| Version | \`${DEPLOY_VERSION:-unknown}\` |"
+            echo "| Deployed | \`$REF\` at \`${DEPLOY_COMMIT:-unknown}\` |"
+            echo "| Smoke account | \`$SMOKE_ACCOUNT\` |"
           } >> "$GITHUB_STEP_SUMMARY"

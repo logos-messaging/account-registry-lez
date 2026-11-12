@@ -105,10 +105,13 @@ same ELF too.
 ### From CI
 
 The **Deploy** workflow does the same from GitHub Actions, on a manual run only: Actions →
-Deploy → Run workflow, from `main` or a `release/*` branch. Each network is a GitHub environment
+Deploy → Run workflow, from `main`, naming in `ref` what to deploy: a `v*` tag, or a branch or
+commit on `main` or a `release/*` branch. Each network is a GitHub environment
 of the same name holding two secrets, `ACCOUNT_REGISTRY_PAYER` and `ACCOUNT_REGISTRY_PROGRAM_KEY`;
-only `testnet` exists so far. Each transaction gets ten minutes to land, and the run's summary
-gives the registry's address, the version deployed and the commit. A build made in CI has its own
+only `lez-testnet` exists so far. Each transaction gets ten minutes to land, and the run's summary
+gives the registry's address, the version deployed and the commit. A build for another LEZ
+version than the network's is refused before anything is sent, and after deploying the run reads
+one known account back. A build made in CI has its own
 image ID, so the first CI run upgrades a deployment made from another machine.
 
 To publish a test account to a deployed registry, and read any account's log back:
