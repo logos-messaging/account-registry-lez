@@ -8,6 +8,7 @@ on:
         type: choice
         options:
           - lez-testnet
+          - lez-devnet
         default: lez-testnet
 
 concurrency:
@@ -28,12 +29,22 @@ jobs:
       - name: Select the network
         env:
           NETWORK: ${{ inputs.network }}
+          ENVIRONMENT_SEQUENCER_URL: ${{ secrets.SEQUENCER_URL }}
         run: |
           case "$NETWORK" in
             lez-testnet)
               echo "SEQUENCER_URL=https://testnet.lez.logos.co" >> "$GITHUB_ENV"
               echo "LEZ_MINOR=0.3" >> "$GITHUB_ENV"
               echo "SMOKE_ACCOUNT=2ff71b3fe5d192bd6273a95f8b2b89de6ac52a78553f21b54cf832314b2670d6" >> "$GITHUB_ENV"
+              ;;
+            lez-devnet)
+              if [ -z "$ENVIRONMENT_SEQUENCER_URL" ]; then
+                echo "::error::set the SEQUENCER_URL secret on the lez-devnet environment" >&2
+                exit 1
+              fi
+              echo "SEQUENCER_URL=$ENVIRONMENT_SEQUENCER_URL" >> "$GITHUB_ENV"
+              echo "LEZ_MINOR=0.4" >> "$GITHUB_ENV"
+              echo "SMOKE_ACCOUNT=" >> "$GITHUB_ENV"
               ;;
             *) echo "unknown network: $NETWORK" >&2; exit 1 ;;
           esac
@@ -63,6 +74,10 @@ jobs:
           echo "ACCOUNT_REGISTRY_PROGRAM=$program" >> "$GITHUB_ENV"
       - name: Check a known account still reads back
         run: |
+          if [ -z "$SMOKE_ACCOUNT" ]; then
+            echo "::warning::no known account on this network; nothing read back"
+            exit 0
+          fi
           target/debug/account-registry fetch "$SMOKE_ACCOUNT" | tee "$RUNNER_TEMP/smoke"
           grep -q "^$SMOKE_ACCOUNT: .*signature valid" "$RUNNER_TEMP/smoke"
       - name: Summary

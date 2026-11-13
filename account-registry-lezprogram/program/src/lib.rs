@@ -1,15 +1,14 @@
 //! The registry's one state transition: append to an account's log.
 //!
-//! The log of the account with Ed25519 address `addr` lives in this program's shard of a PDA
-//! seeded by `addr`, so anyone holding the address can find it. The shard's data is exactly the
-//! bytes libchat transmits, `SignedAccountLog::to_bytes()` (`signature ‖ payload`), so a reader
+//! The log of the account with Ed25519 address `addr` is this program's state on a PDA seeded
+//! by `addr`, so anyone holding the address can find it. The state is exactly the bytes libchat transmits, `SignedAccountLog::to_bytes()` (`signature ‖ payload`), so a reader
 //! verifies it with libchat's own `SignedAccountLog::verify` and trusts no one in between.
 //!
 //! Writes are authorized by that signature, not by a LEE signer: the account needs no key on
-//! LEE, and anyone with a funded fee payer may relay an account's signed log. LEE runs a program
-//! in two steps. [`plan`] sees only the instruction and the accounts it names, and accepts a
-//! write only if the target is `addr`'s PDA and there is something to append. [`apply`] sees
-//! the stored log and accepts the result only if it
+//! LEE, and anyone with a funded fee payer may relay an account's signed log. A LEE program is an
+//! actor: [`handle`] runs once per message, for the one account the message is addressed to, and
+//! sees that account's stored log. It accepts a write only if the account is `addr`'s PDA, there
+//! is something to append, and the result
 //!
 //! - is the stored payload plus new entries (append-only),
 //! - stays within [`MAX_LOG_PAYLOAD_BYTES`](core::MAX_LOG_PAYLOAD_BYTES), and
@@ -25,49 +24,41 @@ use account_log::{ACCOUNT_LOG_DOMAIN, Ed25519VerifyingKey, SignedAccountLog};
 use account_registry_core::{
     ADDR_LEN, Instruction, LogUpdate, MAX_LOG_PAYLOAD_BYTES, SIGNATURE_LEN, derive_lee_account_id,
 };
-use lee_core::program::{Plan, PlanInput};
+use lee_core::program::{ReceiveInput, Response};
 
 mod tests;
 
-/// Plans `instruction` against the one account it targets.
+/// Handles `instruction`, sent to the account `input.receiver`.
 ///
 /// # Panics
 ///
 /// On every rejected instruction — a panic is how a LEE program refuses a transaction.
-pub fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
-    let [account] = input.accounts.as_slice() else {
-        panic!(
-            "account registry: every instruction takes exactly one account, got {}",
-            input.accounts.len()
-        )
-    };
-
-    let mut plan = Plan::new(input);
+pub fn handle(input: &ReceiveInput, instruction: Instruction) -> Response {
     match instruction {
         Instruction::Append(update) => {
+            let program = input.receiver.program_account_id;
             assert!(
-                account.account_id == derive_lee_account_id(&input.self_account_id, &update.addr),
+                input.receiver.account_id == derive_lee_account_id(&program, &update.addr),
                 "the account is not the log account of addr"
             );
-            assert!(!update.entries.is_empty(), "nothing to append");
-            plan.effect(account, &update);
+            Response::set_state(append(&update, &input.pre_state))
         }
     }
-    plan
 }
 
-/// Appends `update.entries` to the log stored in `stored`, and returns the new shard data.
+/// Appends `update.entries` to the log stored in `stored`, and returns the new state.
 ///
 /// # Panics
 ///
-/// If `addr` is not an Ed25519 key, the result exceeds the log size limit, or `addr` did not
-/// sign the result.
+/// If there is nothing to append, `addr` is not an Ed25519 key, the result exceeds the log size
+/// limit, or `addr` did not sign the result.
 #[must_use]
-pub fn apply(update: LogUpdate, stored: &[u8]) -> Option<Vec<u8>> {
+pub fn append(update: &LogUpdate, stored: &[u8]) -> Vec<u8> {
+    assert!(!update.entries.is_empty(), "nothing to append");
     let encoded_log = get_encoded_log(stored);
     let signed_log_bytes = [&update.new_signature[..], encoded_log, &update.entries].concat();
     verify_log_bytes(&signed_log_bytes, &update.addr);
-    Some(signed_log_bytes)
+    signed_log_bytes
 }
 
 fn get_encoded_log(stored_data: &[u8]) -> &[u8] {

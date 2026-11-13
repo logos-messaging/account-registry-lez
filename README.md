@@ -2,8 +2,8 @@
 
 A [Logos Execution Zone](https://github.com/logos-blockchain/logos-execution-zone) (LEZ) program
 that stores [λAccountLogs](https://github.com/logos-messaging/libchat) on chain. Anyone
-holding an account's address can find its log and verify it. Built for LEZ v0.3.2, the version
-the public testnet runs.
+holding an account's address can find its log and verify it. Built for LEZ v0.4.0-rc3, the
+release candidate of the version the public testnet moves to at the end of November 2026.
 
 ## Deployments
 
@@ -15,7 +15,7 @@ Clients take the registry by its program account, e.g. `ACCOUNT_REGISTRY_PROGRAM
 
 ## How it works
 
-- Each address's log lives in the program's shard of a PDA seeded by the address. The shard's
+- Each address's log is the program's state on a PDA seeded by the address. That state's
   data is `SignedAccountLog::to_bytes()`, exactly what libchat transmits.
 - The one instruction, `Append`, adds entries to the log. The program accepts it only if the
   result extends the stored log, stays within 32 KiB, and is signed by the address. The log's
@@ -57,8 +57,9 @@ version.
 ## Running locally
 
 Needs the [RISC Zero toolchain](https://dev.risczero.com/api/zkvm/install) (`rzup install`) to
-build the guest, and `python3` for `run-local-sequencer`, which funds the client's local payer
-at genesis.
+build the guest. `run-local-sequencer` also needs `python3`, to fund the client's local payer at
+genesis, and the PC/SC development library the sequencer links (`libpcsclite-dev` on Debian and
+Ubuntu).
 
 ```sh
 ./run-local-sequencer                                                  # LEZ sequencer at the pinned revision, on :3040
@@ -69,9 +70,9 @@ cargo test --workspace                                                 # include
 cargo test -p account-registry-cli -- --ignored against_a_sequencer    # against the running sequencer
 ```
 
-The local sequencer runs with `RISC0_DEV_MODE=1`, which skips proof verification. Its state
-persists in cargo's checkout of LEZ (`.../lez/sequencer/service/rocksdb-*`); delete that to start
-over.
+The local sequencer runs with `RISC0_DEV_MODE=1`, which skips proof verification. Its build and
+its state live under `target/sequencer-<revision>/`; delete the `home` directory there to start
+the chain over.
 
 ## Deploying
 
@@ -116,7 +117,8 @@ The **Deploy** workflow does the same from GitHub Actions, on a manual run only:
 Deploy → Run workflow. "Use workflow from" picks what is deployed: `main`, a `release/*`
 branch or a `v*` tag that contains the workflow. Each network is a GitHub environment
 of the same name holding two secrets, `ACCOUNT_REGISTRY_PAYER` and `ACCOUNT_REGISTRY_PROGRAM_KEY`;
-only `lez-testnet` exists so far. Each transaction gets ten minutes to land, and the run's summary
+the networks are `lez-testnet` (LEZ v0.3) and `lez-devnet` (LEZ v0.4). `lez-devnet` also holds
+its sequencer's URL, as the secret `SEQUENCER_URL`. Each transaction gets ten minutes to land, and the run's summary
 gives the registry's address, the version deployed and the commit. A build for another LEZ
 version than the network's is refused before anything is sent, and after deploying the run reads
 one known account back. A build made in CI has its own

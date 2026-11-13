@@ -12,6 +12,7 @@
 //! first, at the account the registry was connected to; the `account-registry` CLI does that.
 
 use std::{
+    collections::BTreeMap,
     thread,
     time::{Duration, Instant},
 };
@@ -23,7 +24,7 @@ use account_registry_core::{Instruction, LogUpdate};
 pub use account_registry_core::{MAX_LOG_PAYLOAD_BYTES, PROGRAM_VERSION, append_gas_limit};
 use borsh::BorshSerialize;
 use lee::{
-    FeeDeclaration, PublicKey, PublicTransaction,
+    FeeDeclaration, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use logos_account::{AccountProvider, AccountPublisher};
@@ -31,7 +32,7 @@ use logos_account::{AccountProvider, AccountPublisher};
 use rpc::{LeeTransaction, Sequencer};
 
 pub use error::LezAccountRegError;
-pub use lee::{Account, AccountId, PrivateKey, ProgramShardSelector};
+pub use lee::{Account, AccountId, Actor, PrivateKey, PublicAccountEvidence, PublicKey};
 
 mod error;
 mod rpc;
@@ -94,7 +95,7 @@ impl Registry {
         addr: &AccountAddr,
     ) -> Result<Option<SignedAccountLog>, LezAccountRegError> {
         let account = self.rpc.get_account(self.account_id(addr))?;
-        read(addr, account.data.shard(self.program).as_ref())
+        read(addr, account.data.actor_state(self.program))
     }
 
     /// Publishes `log`, which must extend the log on chain, and waits until it is there.
@@ -109,9 +110,9 @@ impl Registry {
     ) -> Result<(), LezAccountRegError> {
         let prepared = self.prepare_append(addr, log)?;
         let _tx = self.send(
-            prepared.program,
-            vec![prepared.selector()],
+            prepared.actor(),
             &[],
+            vec![prepared.evidence()],
             &prepared.instruction,
             prepared.gas_limit,
         )?;
@@ -166,15 +167,16 @@ impl Registry {
         self.rpc.get_transaction_block(tx)
     }
 
-    /// Sends a transaction to `program` over `selectors`, signed by `signers` and paid by the
-    /// configured payer, each at its current nonce, reserving `gas_limit` execution gas. Returns
-    /// the transaction's hash once the sequencer accepts it, not once it is in a block.
+    /// Sends `message` to the actor `to`, signed by `signers` and paid by the configured payer,
+    /// each at its current nonce, reserving `gas_limit` execution gas. `evidence` must derive
+    /// `to`'s account if it does not exist yet and none of the signers is its key. Returns the
+    /// transaction's hash once the sequencer accepts it, not once it is in a block.
     pub fn send(
         &self,
-        program: AccountId,
-        selectors: Vec<ProgramShardSelector>,
+        to: Actor,
         signers: &[&PrivateKey],
-        instruction: impl BorshSerialize,
+        evidence: Vec<PublicAccountEvidence>,
+        message: impl BorshSerialize,
         gas_limit: u64,
     ) -> Result<String, LezAccountRegError> {
         let payer = self.payer.as_ref().ok_or(LezAccountRegError::NoPayer)?;
@@ -184,8 +186,11 @@ impl Registry {
         }
         let nonces = keys
             .iter()
-            .map(|key| Ok(self.rpc.get_account(signer_id(key))?.nonce))
-            .collect::<Result<_, LezAccountRegError>>()?;
+            .map(|key| {
+                let signer = signer_id(key);
+                Ok((signer, self.rpc.get_account(signer)?.nonce))
+            })
+            .collect::<Result<BTreeMap<_, _>, LezAccountRegError>>()?;
 
         let fee = FeeDeclaration::new(
             signer_id(payer),
@@ -193,18 +198,19 @@ impl Registry {
             0,
             (u128::from(gas_limit) + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE,
         );
-        let message = Message::try_new_with_fees(program, selectors, nonces, instruction, fee)?;
+        let message = borsh::to_vec(&message).expect("borsh encoding into a Vec cannot fail");
+        let message = Message::new(to, message, [to], nonces, Some(fee), evidence);
         let witnesses = WitnessSet::for_message(&message, &keys);
         let tx = PublicTransaction::new(message, witnesses);
         self.rpc.send_transaction(&LeeTransaction::Public(tx))
     }
 }
 
-/// An append ready to submit: a call to `program` over one account, `account`, not signing, in
-/// `program`'s shard. It remembers the address and the log it was prepared for.
+/// An append ready to submit: a message to the actor of `program` on `account`, which does not
+/// sign. It remembers the address and the log it was prepared for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedAppend {
-    /// The registry's program account, which the transaction calls.
+    /// The registry's program account, which handles the message.
     pub program: AccountId,
     /// The account holding the log.
     pub account: AccountId,
@@ -237,14 +243,26 @@ impl PreparedAppend {
         })
     }
 
-    /// The instruction data: the borsh-encoded `Append`.
+    /// The message data: the borsh-encoded `Append`.
     #[must_use]
     pub fn instruction_data(&self) -> Vec<u8> {
         borsh::to_vec(&self.instruction).expect("borsh encoding into a Vec cannot fail")
     }
 
-    fn selector(&self) -> ProgramShardSelector {
-        ProgramShardSelector::new(self.account, self.program)
+    /// The actor the message goes to, and the only one the transaction declares.
+    #[must_use]
+    pub const fn actor(&self) -> Actor {
+        Actor::new(self.account, self.program)
+    }
+
+    /// What the transaction must carry for LEE to admit the log's account before its first
+    /// write. Harmless once the account exists.
+    #[must_use]
+    pub fn evidence(&self) -> PublicAccountEvidence {
+        PublicAccountEvidence::Pda {
+            program: self.program,
+            seed: account_registry_core::log_seed(&addr_bytes(&self.addr)),
+        }
     }
 
     /// Whether `stored`, the log now on chain, is the one this append writes. Fails with
@@ -387,7 +405,7 @@ mod tests {
 
         let append =
             append_instruction(&addr, ACCOUNT_LOG_DOMAIN, &sign(&key, &log).unwrap()).unwrap();
-        let data = account_registry_program::apply(append, &[]).unwrap();
+        let data = account_registry_program::append(&append, &[]);
 
         let stored = read(&addr, &data)
             .unwrap()
@@ -447,7 +465,7 @@ mod tests {
     /// Reading needs no payer, writing does.
     #[test]
     fn a_write_without_a_payer_is_refused() {
-        let refused = registry().send(PROGRAM, vec![], &[], (), 0);
+        let refused = registry().send(Actor::new(PROGRAM, PROGRAM), &[], vec![], (), 0);
         assert!(
             matches!(refused, Err(LezAccountRegError::NoPayer)),
             "{refused:?}"
@@ -455,7 +473,7 @@ mod tests {
     }
 
     /// What a wallet is handed is the same write `publish` sends: only the new entries, under the
-    /// signature of the whole log, addressed to the log's account in the registry's shard.
+    /// signature of the whole log, addressed to the registry's actor on the log's account.
     #[test]
     fn a_prepared_append_is_the_write_the_program_applies() {
         let key = Ed25519SigningKey::generate();
@@ -479,19 +497,16 @@ mod tests {
             update.entries,
             log.payload.as_bytes()[stored.payload.as_bytes().len()..]
         );
-        let written = account_registry_program::apply(update, &stored.to_bytes()).unwrap();
+        let written = account_registry_program::append(&update, &stored.to_bytes());
         assert_eq!(written, log.to_bytes());
 
         let fee = FeeDeclaration::new(PROGRAM, prepared.gas_limit, 0, 1);
-        let message = Message::try_new_with_fees(
-            prepared.program,
-            vec![prepared.selector()],
-            vec![],
-            &prepared.instruction,
-            fee,
-        )
-        .unwrap();
-        assert_eq!(message.instruction_data, prepared.instruction_data());
+        let to = prepared.actor();
+        assert_eq!(prepared.evidence().account_id(), prepared.account);
+        let message =
+            Message::try_new_with_fees(to, [to], BTreeMap::new(), &prepared.instruction, fee)
+                .unwrap();
+        assert_eq!(message.execution.root.message, prepared.instruction_data());
     }
 
     /// Waiting ends when the prepared log is on chain, goes on while the old one is, and reports
@@ -546,13 +561,11 @@ mod tests {
         };
         let payer = PrivateKey::try_new([3; 32]).unwrap();
         let registry = registry().with_payer(payer.clone());
+        let to = Actor::new(registry.account_id(&addr), PROGRAM);
         let message = Message::try_new_with_fees(
-            PROGRAM,
-            vec![ProgramShardSelector::new(
-                registry.account_id(&addr),
-                PROGRAM,
-            )],
-            vec![0_u128.into()],
+            to,
+            [to],
+            BTreeMap::from([(signer_id(&payer), 0_u128.into())]),
             Instruction::Append(update),
             FeeDeclaration::new(
                 signer_id(&payer),

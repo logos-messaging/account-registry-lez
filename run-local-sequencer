@@ -18,8 +18,12 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cargo_home=${CARGO_HOME:-$HOME/.cargo}
 
-# Must match `LOCAL_PAYER_ID` in account-registry-cli/src/main.rs.
-local_payer=78Skt7EQTvVwfWVYnA1XMjghv3aUR1V5wgQAfVLKJZG5
+# Must match `LOCAL_PAYER_PUBLIC_KEY` in account-registry-cli/src/main.rs: genesis names a funded
+# account by its public key.
+local_payer_key=4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa
+
+# A key the mocked Bedrock node needs named, as upstream's Justfile does; it holds nothing here.
+bedrock_funding_key=2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26
 
 # Cargo.toml pins a tag; Cargo.lock records the commit it resolved to.
 tag=$(sed -n 's/.*logos-execution-zone", tag = "\([^"]*\)".*/\1/p' "$repo_root/Cargo.toml" | head -1)
@@ -67,26 +71,34 @@ if [[ ! -d $service ]]; then
 fi
 
 # Build artefacts go outside the checkout: cargo treats its cache as disposable and may prune
-# it, and a release target directory there would be both large and liable to vanish.
-export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$repo_root/target/sequencer}
+# it, and a release target directory there would be both large and liable to vanish. One per
+# revision: cargo reuses stale crates when two revisions share a target directory.
+export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$repo_root/target/sequencer-${rev:0:7}}
 
 # `standalone` mocks the Bedrock node, so no Docker. RISC0_DEV_MODE skips proof verification,
 # which is what makes iteration bearable — never set it for anything you mean to trust.
 export RISC0_DEV_MODE=${RISC0_DEV_MODE:-1}
 export RUST_LOG=${RUST_LOG:-info}
 
+home="$CARGO_TARGET_DIR/home"
 mkdir -p "$CARGO_TARGET_DIR"
-config="$CARGO_TARGET_DIR/sequencer_config.json"
-python3 - "$service/configs/debug/sequencer_config.json" "$config" "$local_payer" <<'EOF'
+cd "$checkout"
+
+# `setup` writes the home once; the chain's state then lives there. Delete it to start over.
+if [[ ! -f $home/sequencer_config.json ]]; then
+    config="$CARGO_TARGET_DIR/local.json"
+    python3 - "$service/networks/local.json" "$config" "$local_payer_key" <<'EOF'
 import json, sys
 source, target, payer = sys.argv[1:]
 config = json.load(open(source))
-config["genesis"].append({"supply_account": {"account_id": payer, "balance": 10**13}})
+recipient = {"identified": {"key": payer}}
+config["genesis"]["actions"].append({"supply_account": {"recipient": recipient, "balance": 10**13}})
 json.dump(config, open(target, "w"), indent=2)
 EOF
+    cargo run --release -q --features standalone -p sequencer_service -- setup "$home" --config "$config" \
+        --funding-public-key "$bedrock_funding_key" --create-channel
+fi
 
-echo "Sequencer at ${rev:0:7}, binding :3040, local payer $local_payer funded. Ctrl-C to stop." >&2
+echo "Sequencer at ${rev:0:7}, binding :3040, local payer funded, state in $home. Ctrl-C to stop." >&2
 
-# The config's paths are relative to the service directory, which is why this runs from there.
-cd "$service"
-exec cargo run --release --features standalone -p sequencer_service -- "$config" "$@"
+exec cargo run --release --features standalone -p sequencer_service -- start "$home" "$@"

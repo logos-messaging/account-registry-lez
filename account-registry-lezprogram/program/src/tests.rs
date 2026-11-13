@@ -6,11 +6,11 @@ use account_log::{
 };
 use account_registry_core::{Instruction, LogUpdate, MAX_LOG_PAYLOAD_BYTES, derive_lee_account_id};
 use lee_core::{
-    account::AccountId,
-    program::{AccountMeta, PlanInput},
+    account::{AccountId, Actor},
+    program::ReceiveInput,
 };
 
-use crate::{apply, plan};
+use crate::handle;
 
 const PROGRAM: AccountId = AccountId::new([7; 32]);
 
@@ -44,33 +44,28 @@ impl Owner {
         }
     }
 
-    fn account(&self) -> AccountMeta {
-        AccountMeta::new(
-            derive_lee_account_id(&PROGRAM, &self.addr()),
-            false,
-            PROGRAM,
-        )
+    fn account(&self) -> AccountId {
+        derive_lee_account_id(&PROGRAM, &self.addr())
     }
 }
 
-fn plan_input(accounts: Vec<AccountMeta>, update: &LogUpdate) -> PlanInput {
-    PlanInput {
-        self_account_id: PROGRAM,
-        caller_account_id: None,
-        accounts,
-        instruction_data: borsh::to_vec(&Instruction::Append(update.clone())).unwrap(),
-    }
-}
-
-/// Plans `update` against `account`, then applies the effect to `stored`, as LEE would.
-fn run(account: AccountMeta, stored: &[u8], update: LogUpdate) -> Vec<u8> {
-    let input = plan_input(vec![account], &update);
-    let planned = plan(&input, Instruction::Append(update));
-    let [effect] = planned.output().effects.as_slice() else {
-        panic!("one effect per append")
+/// Sends `update` to `account`, whose stored log is `stored`, as LEE would, and returns the
+/// state the program leaves there.
+fn run(account: AccountId, stored: &[u8], update: LogUpdate) -> Vec<u8> {
+    let instruction = Instruction::Append(update);
+    let input = ReceiveInput {
+        receiver: Actor::new(account, PROGRAM),
+        from: None,
+        is_authorized: false,
+        pre_state: stored.to_vec().into(),
+        message: borsh::to_vec(&instruction).unwrap(),
     };
-    let update = borsh::from_slice(&effect.data).unwrap();
-    apply(update, stored).expect("an append always writes")
+    let response = handle(&input, instruction);
+    assert!(response.sync_messages.is_empty() && response.async_messages.is_empty());
+    response
+        .post_state
+        .expect("an append always writes")
+        .into_inner()
 }
 
 #[test]
@@ -88,43 +83,11 @@ fn creates_then_extends_a_log_readers_accept() {
 }
 
 #[test]
-fn plans_one_effect_on_the_addrs_shard() {
-    let owner = Owner::new();
-    let update = owner.append(ACCOUNT_LOG_DOMAIN, &log(&["one"]));
-    let input = plan_input(vec![owner.account()], &update);
-
-    let planned = plan(&input, Instruction::Append(update));
-    let [effect] = planned.output().effects.as_slice() else {
-        panic!("one effect per append")
-    };
-    assert_eq!(effect.selector.account_id, owner.account().account_id);
-    assert_eq!(effect.selector.program_account_id, PROGRAM);
-}
-
-#[test]
 #[should_panic(expected = "not the log account of addr")]
 fn rejects_another_addresss_account() {
     let (owner, victim) = (Owner::new(), Owner::new());
     let append = owner.append(ACCOUNT_LOG_DOMAIN, &log(&["one"]));
     run(victim.account(), &[], append);
-}
-
-#[test]
-#[should_panic(expected = "exactly one account")]
-fn rejects_more_than_one_account() {
-    let (owner, other) = (Owner::new(), Owner::new());
-    let append = owner.append(ACCOUNT_LOG_DOMAIN, &log(&["one"]));
-    let input = plan_input(vec![owner.account(), other.account()], &append);
-    let _ = plan(&input, Instruction::Append(append));
-}
-
-#[test]
-#[should_panic(expected = "names the shard of")]
-fn rejects_another_programs_shard() {
-    let owner = Owner::new();
-    let append = owner.append(ACCOUNT_LOG_DOMAIN, &log(&["one"]));
-    let foreign = AccountMeta::new(owner.account().account_id, false, AccountId::new([9; 32]));
-    run(foreign, &[], append);
 }
 
 #[test]
@@ -190,8 +153,7 @@ fn rejects_an_addr_that_is_not_an_ed25519_key() {
     identity[0] = 1;
     let mut append = Owner::new().append(ACCOUNT_LOG_DOMAIN, &log(&["one"]));
     append.addr = identity;
-    let account = AccountMeta::new(derive_lee_account_id(&PROGRAM, &identity), false, PROGRAM);
-    run(account, &[], append);
+    run(derive_lee_account_id(&PROGRAM, &identity), &[], append);
 }
 
 #[test]

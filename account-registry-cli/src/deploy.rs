@@ -2,21 +2,28 @@
 //! then a header at the program account points at them. The header's key is the program's
 //! upgrade authority, so whoever holds it can redeploy at the same program account, and every
 //! log stays where it is.
+//!
+//! The loader writes a segment or a header only to an account that signs for it. Segment keys
+//! are derived from the header key, so only its holder can write this deployment's segments.
 
 use std::time::Duration;
 
-use account_registry_client::{AccountId, PrivateKey, ProgramShardSelector, Registry, signer_id};
+use account_registry_client::{AccountId, Actor, PrivateKey, Registry, signer_id};
 use account_registry_methods::{ACCOUNT_REGISTRY_ELF, ACCOUNT_REGISTRY_ID};
-use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramHeader, ProgramSegment};
-use program_loader_core::{Instruction, MAX_PROGRAM_SEGMENTS, MAX_SEGMENT_DATA_LEN};
+use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramSegment};
+use program_loader_core::{Message, build_segments, segment_count};
+use sha2::{Digest, Sha256};
 
 use crate::{
     Error,
     progress::{Progress, units},
 };
 
-/// Execution gas reserved for a program loader transaction, which runs natively and meters none.
-const LOADER_GAS_LIMIT: u64 = 1_000_000;
+/// Execution gas reserved over the size of the user ELF. The loader runs natively and charges
+/// one gas per byte of loader state it reads, at most the whole segment chain.
+const LOADER_GAS_MARGIN: u64 = 100_000;
+
+const SEGMENT_KEY_DOMAIN: &[u8] = b"account-registry/segment-key/v1";
 
 /// Deploys the registry program at the program account `registry` was connected to, whose
 /// key is `header`. Upgrades it in place if an older build is there, and does nothing if this
@@ -57,43 +64,33 @@ pub fn deploy(
         None => eprintln!("  on chain: nothing; deploying image {image}"),
     }
 
-    let chunks = user_elf_chunks()?;
-    let bytes: usize = chunks.iter().map(|chunk| chunk.len()).sum();
+    let user_elf = user_elf()?;
+    let count = segment_count(&user_elf);
     eprintln!(
-        "  this build: {} segments, {} bytes",
-        chunks.len(),
-        units(bytes as u128)
+        "  this build: {count} segments, {} bytes",
+        units(user_elf.len() as u128)
     );
+    let gas_limit = u64::try_from(user_elf.len())
+        .expect("an ELF's size fits in u64")
+        .saturating_add(LOADER_GAS_MARGIN);
 
-    let mut progress = Progress::new(registry, payer, timeout, chunks.len() + 1)?;
-    let segments = upload_segments(registry, &chunks, &mut progress)?;
-    let instruction = if existing.is_some() {
-        Instruction::UpdateHeader {
-            first_segment: segments[0],
+    let mut progress = Progress::new(registry, payer, timeout, count + 1)?;
+    let first_segment = upload_segments(registry, header, &user_elf, gas_limit, &mut progress)?;
+    let message = if existing.is_some() {
+        Message::UpdateHeader {
+            first_segment,
             immutable: false,
         }
     } else {
-        Instruction::CreateHeader {
-            first_segment: segments[0],
+        Message::CreateHeader {
+            first_segment,
             immutable: false,
         }
     };
-    let selectors = [registry.program()]
-        .into_iter()
-        .chain(segments.iter().copied())
-        .map(loader_shard)
-        .collect();
+    let to = loader_actor(registry.program());
     progress.submit(
         "header",
-        || {
-            registry.send(
-                PROGRAM_LOADER_ACCOUNT_ID,
-                selectors,
-                &[header],
-                instruction,
-                LOADER_GAS_LIMIT,
-            )
-        },
+        || registry.send(to, &[header], vec![], message, gas_limit),
         || Ok(deployed(registry)?.is_some_and(|deployed| deployed.image_id == ACCOUNT_REGISTRY_ID)),
     )?;
     progress.finish()
@@ -103,20 +100,19 @@ pub fn deploy(
 /// holds other loader data, such as a segment: a header can never be created over it.
 fn deployed(registry: &Registry) -> Result<Option<ProgramHeader>, Error> {
     let account = registry.account(registry.program())?;
-    let shard = account.data.shard(PROGRAM_LOADER_ACCOUNT_ID);
-    if shard.is_empty() {
+    let state = account.data.actor_state(PROGRAM_LOADER_ACCOUNT_ID);
+    if state.is_empty() {
         return Ok(None);
     }
-    ProgramHeader::from_bytes(shard.as_ref())
+    ProgramHeader::from_loader_actor_state(state)
         .map(Some)
         .ok_or_else(|| {
             Error::Deploy("the program account holds loader data that is not a header".into())
         })
 }
 
-/// This build's user ELF, the part of the guest binary the loader stores, in segment-sized
-/// pieces.
-fn user_elf_chunks() -> Result<Vec<&'static [u8]>, Error> {
+/// This build's user ELF, the part of the guest binary the loader stores.
+fn user_elf() -> Result<Vec<u8>, Error> {
     let binary = risc0_binfmt::ProgramBinary::decode(ACCOUNT_REGISTRY_ELF)
         .map_err(|error| Error::Deploy(error.to_string()))?;
     if binary.kernel_elf != risc0_zkos_v1compat::V1COMPAT_ELF {
@@ -124,108 +120,94 @@ fn user_elf_chunks() -> Result<Vec<&'static [u8]>, Error> {
             "the guest is not built with LEE's default kernel".into(),
         ));
     }
-    let chunks: Vec<&[u8]> = binary.user_elf.chunks(MAX_SEGMENT_DATA_LEN).collect();
-    if chunks.is_empty() || chunks.len() > MAX_PROGRAM_SEGMENTS {
-        return Err(Error::Deploy(format!(
-            "the guest needs {} segments, the loader takes 1 to {MAX_PROGRAM_SEGMENTS}",
-            chunks.len()
-        )));
-    }
-    Ok(chunks)
+    Ok(binary.user_elf.to_vec())
 }
 
-/// Writes `chunks` as a segment chain, tail first, each waiting for the next to land, and
-/// returns the chain head first. A segment already written with the same contents is kept, so
-/// a deploy that stopped half way resumes; one with other contents is an error.
+/// Writes `user_elf` as a segment chain, tail first, each waiting for the next to land, and
+/// returns the first segment's account. A segment already written is kept, so a deploy that
+/// stopped half way resumes.
 fn upload_segments(
     registry: &Registry,
-    chunks: &[&[u8]],
+    header: &PrivateKey,
+    user_elf: &[u8],
+    gas_limit: u64,
     progress: &mut Progress,
-) -> Result<Vec<AccountId>, Error> {
-    let segments: Vec<AccountId> = (0..chunks.len())
-        .map(|index| segment_account(registry, index))
-        .collect();
+) -> Result<AccountId, Error> {
+    let keys = (0..segment_count(user_elf))
+        .map(|index| segment_key(header, index))
+        .collect::<Result<Vec<_>, _>>()?;
+    let accounts: Vec<AccountId> = keys.iter().map(signer_id).collect();
+    let segments =
+        build_segments(user_elf, &accounts).map_err(|error| Error::Deploy(error.to_string()))?;
+    let first = *accounts
+        .first()
+        .ok_or_else(|| Error::Deploy("the guest's user ELF is empty".into()))?;
 
-    for (index, chunk) in chunks.iter().enumerate().rev() {
+    let count = segments.len();
+    let chain = keys.iter().zip(accounts).zip(segments).enumerate().rev();
+    for (index, ((key, account), segment)) in chain {
         let what = format!(
-            "segment {} of {}, {} bytes",
+            "segment {} of {count}, {} bytes",
             index + 1,
-            chunks.len(),
-            units(chunk.len() as u128)
+            units(segment.bytecode.len() as u128)
         );
-        let next_segment = segments.get(index + 1).copied();
-        let expected = ProgramSegment {
-            bytecode: chunk.to_vec(),
-            next_segment,
-        };
-        if check_segment(registry, segments[index], &expected)? {
+        if check_segment(registry, account, &segment)? {
             progress.skip(&what);
             continue;
         }
-        let mut selectors = vec![loader_shard(segments[index])];
-        selectors.extend(next_segment.map(loader_shard));
-        let instruction = Instruction::WriteSegment {
-            bytecode: expected.bytecode.clone(),
-            next_segment,
+        let message = Message::WriteSegment {
+            bytecode: segment.bytecode.clone(),
+            next_segment: segment.next_segment,
         };
         progress.submit(
             &what,
-            || {
-                registry.send(
-                    PROGRAM_LOADER_ACCOUNT_ID,
-                    selectors,
-                    &[],
-                    instruction,
-                    LOADER_GAS_LIMIT,
-                )
-            },
-            || check_segment(registry, segments[index], &expected),
+            || registry.send(loader_actor(account), &[key], vec![], message, gas_limit),
+            || check_segment(registry, account, &segment),
         )?;
     }
-    Ok(segments)
+    Ok(first)
 }
 
-/// Whether `account` holds `expected`. Fails if it holds any other segment: segments are
-/// immutable and anyone may write one, so a squatted address can never be fixed.
+/// Whether `account` holds `expected`. Fails if it holds any other loader data: segments are
+/// immutable, so the account could never hold this one.
 fn check_segment(
     registry: &Registry,
     account: AccountId,
     expected: &ProgramSegment,
 ) -> Result<bool, Error> {
-    match segment(registry, account)? {
-        None => Ok(false),
-        Some(segment) if &segment == expected => Ok(true),
-        Some(_) => Err(Error::Deploy(format!(
-            "segment {account} holds another program's bytecode"
-        ))),
+    let stored = registry.account(account)?;
+    let state = stored.data.actor_state(PROGRAM_LOADER_ACCOUNT_ID);
+    if state.is_empty() {
+        return Ok(false);
     }
-}
-
-fn segment(registry: &Registry, account: AccountId) -> Result<Option<ProgramSegment>, Error> {
-    let account = registry.account(account)?;
-    Ok(ProgramSegment::from_bytes(
-        account.data.shard(PROGRAM_LOADER_ACCOUNT_ID).as_ref(),
-    ))
-}
-
-/// Where segment `index` of this build lives: derived from the program account and the image,
-/// so each build gets fresh segments and a retry finds the ones it already wrote.
-fn segment_account(registry: &Registry, index: usize) -> AccountId {
-    let mut seed = [0u8; 32];
-    for (chunk, word) in seed
-        .as_chunks_mut::<4>()
-        .0
-        .iter_mut()
-        .zip(ACCOUNT_REGISTRY_ID)
-    {
-        *chunk = word.to_le_bytes();
+    if ProgramSegment::from_loader_actor_state(state).as_ref() == Some(expected) {
+        return Ok(true);
     }
-    seed[31] ^= u8::try_from(index).expect("at most MAX_PROGRAM_SEGMENTS segments");
-    AccountId::for_public_pda(&registry.program(), &PdaSeed::new(seed))
+    Err(Error::Deploy(format!(
+        "segment account {account} holds other loader data"
+    )))
 }
 
-fn loader_shard(account: AccountId) -> ProgramShardSelector {
-    ProgramShardSelector::new(account, PROGRAM_LOADER_ACCOUNT_ID)
+/// The key of segment `index` of this build under `header`: derived from the header key and the
+/// image, so each build gets fresh segment accounts and a retry finds the ones it already wrote.
+fn segment_key(header: &PrivateKey, index: usize) -> Result<PrivateKey, Error> {
+    let mut hasher = Sha256::new();
+    hasher.update(SEGMENT_KEY_DOMAIN);
+    hasher.update(header.value());
+    for word in ACCOUNT_REGISTRY_ID {
+        hasher.update(word.to_le_bytes());
+    }
+    hasher.update(
+        u64::try_from(index)
+            .expect("an index fits in u64")
+            .to_le_bytes(),
+    );
+    PrivateKey::try_new(hasher.finalize().into())
+        .map_err(|_| Error::Deploy(format!("no valid key derives for segment {index}")))
+}
+
+fn loader_actor(account: AccountId) -> Actor {
+    Actor::new(account, PROGRAM_LOADER_ACCOUNT_ID)
 }
 
 /// An image ID as its digest in hex, shortened to tell two builds apart.
@@ -236,4 +218,28 @@ fn image_hex(image: [u32; 8]) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect();
     format!("{}…{}", &hex[..8], &hex[56..])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn segment_keys_differ_by_index_and_header() {
+        let header = PrivateKey::try_new([5; 32]).unwrap();
+        let other = PrivateKey::try_new([6; 32]).unwrap();
+        let key = |header, index| signer_id(&segment_key(header, index).unwrap());
+
+        assert_eq!(key(&header, 0), key(&header, 0));
+        assert_ne!(key(&header, 0), key(&header, 1));
+        assert_ne!(key(&header, 0), key(&other, 0));
+    }
+
+    #[test]
+    fn the_guest_splits_into_a_chain_the_loader_takes() {
+        let user_elf = user_elf().unwrap();
+        let count = segment_count(&user_elf);
+        let accounts = vec![AccountId::new([1; 32]); count];
+        assert!(build_segments(&user_elf, &accounts).is_ok(), "{count}");
+    }
 }

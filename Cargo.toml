@@ -11,7 +11,7 @@ members = [
 exclude = ["account-registry-lezprogram/methods/guest"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0-rc.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
@@ -24,10 +24,10 @@ account-registry-client = { path = "account-registry-client" }
 # One revision for every LEZ crate: the program, the client and the sequencer must agree on the
 # protocol. Bump them together, and with them the guest's `lee_core`
 # (account-registry-lezprogram/methods/guest/Cargo.toml).
-lee = { git = "https://github.com/logos-blockchain/logos-execution-zone", tag = "v0.3.2" }
-lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone", tag = "v0.3.2" }
-lez_common = { package = "common", git = "https://github.com/logos-blockchain/logos-execution-zone", tag = "v0.3.2" }
-program_loader_core = { git = "https://github.com/logos-blockchain/logos-execution-zone", tag = "v0.3.2" }
+lee = { git = "https://github.com/logos-blockchain/logos-execution-zone", tag = "v0.4.0-rc3" }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone", tag = "v0.4.0-rc3" }
+lez_common = { package = "common", git = "https://github.com/logos-blockchain/logos-execution-zone", tag = "v0.4.0-rc3" }
+program_loader_core = { git = "https://github.com/logos-blockchain/logos-execution-zone", tag = "v0.4.0-rc3" }
 
 # The log format. The program links it, so the chain accepts exactly what readers accept.
 account-log = { git = "https://github.com/logos-messaging/libchat", rev = "80124073090287fedc4172a492f9447ffad1782f" }
@@ -37,13 +37,14 @@ logos-account = { package = "account", git = "https://github.com/logos-messaging
 base64 = "0.22.1"
 borsh = "1.5.7"
 clap = { version = "4.5", features = ["derive", "env"] }
-# The versions LEZ v0.3.2 resolves; the program loader accepts only its default kernel.
+# The versions LEZ v0.4.0-rc3 resolves; the program loader accepts only its default kernel.
 risc0-binfmt = "3.0.2"
 risc0-zkos-v1compat = "=2.2.2"
 risc0-build = "3.0.5"
 risc0-zkvm = { version = "3.0.5", default-features = false, features = ["std"] }
 serde = "1.0"
 serde_json = "1.0"
+sha2 = "0.10"
 thiserror = "2.0"
 # Blocking HTTP for the client's JSON-RPC: no async runtime anywhere in the client.
 ureq = { version = "3.5.1", default-features = false, features = ["json", "rustls"] }

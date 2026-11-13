@@ -1,8 +1,8 @@
 //! Runs the compiled guest through LEE's state machine, as a sequencer does, so a transaction
-//! here plans and applies exactly as it would on chain. The transition rules themselves are
+//! here is handled exactly as it would be on chain. The transition rules themselves are
 //! tested in the program crate.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use account_log::{ACCOUNT_LOG_DOMAIN, AccountLogDraft, Context, Ed25519SigningKey, EntryData};
 use account_registry_core::{
@@ -11,10 +11,11 @@ use account_registry_core::{
 };
 use account_registry_methods::{ACCOUNT_REGISTRY_ELF, ACCOUNT_REGISTRY_ID};
 use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction, V03State, ValidatedStateDiff,
+    AccountId, Actor, PublicAccountEvidence, PublicTransaction, V03State, ValidatedStateDiff,
     program::Program,
     public_transaction::{Message, WitnessSet},
 };
+use lee_core::program::PdaSeed;
 
 /// Where the tests deploy the program, as a deployer's `CreateHeader` would.
 const PROGRAM: AccountId = AccountId::new([0xA1; 32]);
@@ -50,8 +51,7 @@ impl Owner {
         state
             .get_account_by_id(derive_lee_account_id(&PROGRAM, &self.addr()))
             .data
-            .shard(PROGRAM)
-            .as_ref()
+            .actor_state(PROGRAM)
             .to_vec()
     }
 }
@@ -59,9 +59,13 @@ impl Owner {
 /// An unsigned, fee-exempt transaction: the state machine checks neither, the sequencer does.
 fn append_tx(update: LogUpdate) -> PublicTransaction {
     let account = derive_lee_account_id(&PROGRAM, &update.addr);
-    let selector = ProgramShardSelector::new(account, PROGRAM);
-    let message =
-        Message::try_new(PROGRAM, vec![selector], vec![], Instruction::Append(update)).unwrap();
+    let to = Actor::new(account, PROGRAM);
+    let evidence = PublicAccountEvidence::Pda {
+        program: PROGRAM,
+        seed: PdaSeed::new(update.addr),
+    };
+    let instruction = borsh::to_vec(&Instruction::Append(update)).unwrap();
+    let message = Message::new(to, instruction, [to], BTreeMap::new(), None, vec![evidence]);
     let witnesses = WitnessSet::for_message(&message, &[]);
     PublicTransaction::new(message, witnesses)
 }
@@ -72,8 +76,7 @@ fn apply(state: &mut V03State, update: LogUpdate) -> u64 {
     let stored = state
         .get_account_by_id(derive_lee_account_id(&PROGRAM, &update.addr))
         .data
-        .shard(PROGRAM)
-        .as_ref()
+        .actor_state(PROGRAM)
         .len();
     let base = if stored == 0 {
         ACCOUNT_LOG_DOMAIN.len()

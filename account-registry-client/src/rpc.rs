@@ -50,9 +50,11 @@ impl Sequencer {
         Self { agent, url }
     }
 
-    /// The account's current state; a default account if nothing was ever written to it.
+    /// The account's current state; a default account if nothing was ever written to it, which
+    /// the sequencer reports as `null`.
     pub(crate) fn get_account(&self, account_id: AccountId) -> Result<Account, LezAccountRegError> {
-        self.call("getAccount", (account_id,))
+        let account: Option<Account> = self.call("getAccount", (account_id,))?;
+        Ok(account.unwrap_or_default())
     }
 
     /// The account's native balance, in the zone's smallest unit.
