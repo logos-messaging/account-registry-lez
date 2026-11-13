@@ -9,3 +9,6 @@ target/
 .env
 .env.*
 !.env.example
+
+# The relay's default state directory, holding its libp2p key.
+relay-state/

@@ -245,7 +245,13 @@ impl Relay {
     /// unwilling, without spending anything.
     fn check(&self, request: &RelayRequest, source: &'static str) -> Result<Approved, String> {
         let nullifier = self.auth.verify(request)?;
-        if nullifier.as_deref().is_some_and(|n| self.ledger.used(n)) {
+        if let Some(used) = nullifier.as_deref()
+            && (self.ledger.used(used)
+                || self
+                    .approved
+                    .iter()
+                    .any(|approved| approved.nullifier.as_deref() == Some(used)))
+        {
             return Err("these credentials were already used".into());
         }
 
@@ -264,19 +270,26 @@ impl Relay {
                 self.policy.max_log_bytes
             ));
         }
-        let stored = self
-            .registry
-            .fetch(&addr)
-            .map_err(|error| error.to_string())?;
-        if stored.as_ref() == Some(&log) {
-            return Err("already published".into());
-        }
         if self.ledger.writes_today(&addr.to_string(), now()) >= self.policy.max_per_account_per_day
         {
             return Err(format!(
                 "the relay sponsors {} updates a day per account; try later, or pay yourself",
                 self.policy.max_per_account_per_day
             ));
+        }
+        let (hour, day) = self.ledger.recent(now());
+        let waiting = self.approved.len();
+        let (hour, day) = (hour + waiting, day + waiting);
+        if hour >= self.policy.max_per_hour || day >= self.policy.max_per_day {
+            return Err("the relay is at its limit; try later, or pay yourself".into());
+        }
+
+        let stored = self
+            .registry
+            .fetch(&addr)
+            .map_err(|error| error.to_string())?;
+        if stored.as_ref() == Some(&log) {
+            return Err("already published".into());
         }
         if stored.is_some() && self.policy.new_accounts_only {
             return Err("the relay sponsors new accounts only".into());
@@ -285,12 +298,6 @@ impl Relay {
             .prepare_append(&addr, &log)
             .map_err(|error| error.to_string())?;
 
-        let (hour, day) = self.ledger.recent(now());
-        let waiting = self.approved.len();
-        let (hour, day) = (hour + waiting, day + waiting);
-        if hour >= self.policy.max_per_hour || day >= self.policy.max_per_day {
-            return Err("the relay is at its limit; try later, or pay yourself".into());
-        }
         let balance = self
             .registry
             .balance(self.payer)

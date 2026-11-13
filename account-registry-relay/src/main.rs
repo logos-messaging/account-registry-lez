@@ -2,8 +2,9 @@
 //! account can be published before its owner holds any funds.
 //!
 //! Submissions arrive over libp2p, as Logos Core's `libp2p_module` sends them, over HTTP, and
-//! over Logos Delivery, through a `logosdeliverynode`'s REST endpoint. Anyone can run a relay: a log authorizes its own write, so a relay can only decline
-//! one, never forge or alter it. The payer's key comes from `ACCOUNT_REGISTRY_PAYER`.
+//! over Logos Delivery, through a `logosdeliverynode`'s REST endpoint. Anyone can run a relay: a
+//! log authorizes its own write, so a relay can only decline one, never forge or alter it. The
+//! payer's key comes from `ACCOUNT_REGISTRY_PAYER`.
 
 use std::{path::PathBuf, process::ExitCode, sync::mpsc, thread};
 
@@ -71,9 +72,11 @@ struct Args {
     #[arg(long, default_value_t = 4096)]
     max_log_bytes: usize,
 
+    /// Sponsored writes in any hour, across all accounts.
     #[arg(long, default_value_t = 30)]
     max_per_hour: usize,
 
+    /// Sponsored writes in any 24 hours, across all accounts.
     #[arg(long, default_value_t = 200)]
     max_per_day: usize,
 
@@ -135,7 +138,8 @@ fn run(args: Args) -> Result<(), String> {
         let jobs = jobs.clone();
         workers.push(thread::spawn(move || {
             if let Err(error) = p2p::serve(key, listen, &jobs) {
-                eprintln!("p2p: {error}");
+                eprintln!("error: p2p: {error}");
+                std::process::exit(1);
             }
         }));
     }

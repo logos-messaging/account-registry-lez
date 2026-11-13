@@ -3,7 +3,7 @@
 
 use std::{
     io::Read,
-    sync::mpsc::{self, SyncSender},
+    sync::mpsc::{self, SyncSender, TrySendError},
     thread,
 };
 
@@ -44,7 +44,7 @@ fn route(request: &mut Request, jobs: &SyncSender<Job>) -> (u16, Value) {
         (Method::Post, "/v1/submit") => {
             let (status, reply) = match body_of(request) {
                 Ok(body) => submit(&body, jobs),
-                Err(reason) => (413, refusal(reason)),
+                Err((status, reason)) => (status, refusal(reason)),
             };
             (
                 status,
@@ -71,8 +71,12 @@ fn submit(body: &[u8], jobs: &SyncSender<Job>) -> (u16, RelayReply) {
 
 fn status(jobs: &SyncSender<Job>) -> (u16, Value) {
     let (reply, answer) = mpsc::channel();
-    if jobs.send(Job::Status(reply)).is_err() {
-        return (503, json!({ "error": "the relay is stopping" }));
+    match jobs.try_send(Job::Status(reply)) {
+        Ok(()) => {}
+        Err(TrySendError::Full(_)) => return (503, json!({ "error": "the relay is busy" })),
+        Err(TrySendError::Disconnected(_)) => {
+            return (503, json!({ "error": "the relay is stopping" }));
+        }
     }
     answer.recv().map_or_else(
         |_| (503, json!({ "error": "the relay is stopping" })),
@@ -80,15 +84,15 @@ fn status(jobs: &SyncSender<Job>) -> (u16, Value) {
     )
 }
 
-fn body_of(request: &mut Request) -> Result<Vec<u8>, String> {
+fn body_of(request: &mut Request) -> Result<Vec<u8>, (u16, String)> {
     let mut body = Vec::new();
     request
         .as_reader()
         .take(MAX_BODY_BYTES + 1)
         .read_to_end(&mut body)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| (400, error.to_string()))?;
     if body.len() as u64 > MAX_BODY_BYTES {
-        return Err("the submission is too large".into());
+        return Err((413, "the submission is too large".into()));
     }
     Ok(body)
 }

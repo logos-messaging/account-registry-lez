@@ -2,13 +2,17 @@
 FROM rust:1.98.1-slim-bookworm AS build
 WORKDIR /src
 COPY . .
-RUN cargo build --release --locked -p account-registry-relay
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --locked -p account-registry-relay \
+    && cp target/release/account-relay /usr/local/bin/account-relay
 
 FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=build /src/target/release/account-relay /usr/local/bin/account-relay
+COPY --from=build /usr/local/bin/account-relay /usr/local/bin/account-relay
 RUN useradd --system --uid 10001 --home-dir /state relay \
     && mkdir /state && chown relay /state
 USER relay
