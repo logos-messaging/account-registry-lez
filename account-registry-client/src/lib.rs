@@ -109,14 +109,20 @@ impl Registry {
         log: &SignedAccountLog,
     ) -> Result<(), LezAccountRegError> {
         let prepared = self.prepare_append(addr, log)?;
-        let _tx = self.send(
+        let _tx = self.send_append(&prepared)?;
+        self.await_append(&prepared, PUBLISH_TIMEOUT)
+    }
+
+    /// Sends `prepared`, paid by the configured payer, and returns the transaction's hash once
+    /// the sequencer accepts it. [`Registry::await_append`] then waits for it to land.
+    pub fn send_append(&self, prepared: &PreparedAppend) -> Result<String, LezAccountRegError> {
+        self.send(
             prepared.program,
             vec![prepared.selector()],
             &[],
             &prepared.instruction,
             prepared.gas_limit,
-        )?;
-        self.await_append(&prepared, PUBLISH_TIMEOUT)
+        )
     }
 
     /// The write that takes the log on chain to `log`, for a caller that submits it itself, e.g.
@@ -250,7 +256,7 @@ impl PreparedAppend {
 
     /// Whether `stored`, the log now on chain, is the one this append writes. Fails with
     /// [`LezAccountRegError::Conflict`] if it is neither that nor the log the append started from.
-    fn landed(&self, stored: Option<&SignedAccountLog>) -> Result<bool, LezAccountRegError> {
+    pub fn landed(&self, stored: Option<&SignedAccountLog>) -> Result<bool, LezAccountRegError> {
         match stored {
             Some(stored) if stored == &self.log => Ok(true),
             Some(stored) if stored.payload.as_bytes() != self.base => {

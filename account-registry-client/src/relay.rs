@@ -6,8 +6,9 @@
 //! [`Registry::await_append`](crate::Registry::await_append), and falls back to paying itself if
 //! it does not appear.
 //!
-//! A submission reaches a relay over Logos Delivery, on [`RELAY_CONTENT_TOPIC`], or over HTTP, as
-//! the body of `POST /v1/submit`.
+//! A submission reaches a relay over libp2p, on `/logos/accounts/relay/1.0.0` as one
+//! varint-framed message, over HTTP, as the body of `POST /v1/submit`, or over Logos Delivery, on
+//! [`RELAY_CONTENT_TOPIC`].
 
 use std::time::Duration;
 

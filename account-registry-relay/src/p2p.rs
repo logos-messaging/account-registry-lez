@@ -7,12 +7,7 @@
 //! request is read by its length, never to the end of the stream. The connection is TCP with
 //! Noise and mplex, the only muxer `libp2p_module` offers over TCP.
 
-use std::{
-    fs, io,
-    path::Path,
-    sync::mpsc::{self, Sender},
-    time::Duration,
-};
+use std::{fs, io, path::Path, sync::mpsc::SyncSender, time::Duration};
 
 use account_registry_client::relay::{RelayReply, RelayRequest};
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, StreamExt};
@@ -25,7 +20,7 @@ use libp2p::{
     tcp,
 };
 
-use crate::relay::{Job, Submission};
+use crate::relay::{Job, ask, refusal};
 
 /// The relay's protocol.
 pub const PROTOCOL: &str = "/logos/accounts/relay/1.0.0";
@@ -146,7 +141,11 @@ pub fn identity(dir: &Path) -> io::Result<Keypair> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let key = Keypair::from(secp256k1::Keypair::generate());
             let encoded = key.to_protobuf_encoding().map_err(io::Error::other)?;
-            fs::write(&path, hex::encode(encoded))?;
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            io::Write::write_all(&mut options.open(&path)?, hex::encode(encoded).as_bytes())?;
             Ok(key)
         }
         Err(error) => Err(error),
@@ -154,7 +153,7 @@ pub fn identity(dir: &Path) -> io::Result<Keypair> {
 }
 
 /// Serves the relay protocol on `listen` until the worker is gone.
-pub fn serve(key: Keypair, listen: Multiaddr, jobs: &Sender<Job>) -> Result<(), String> {
+pub fn serve(key: Keypair, listen: Multiaddr, jobs: &SyncSender<Job>) -> Result<(), String> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -162,7 +161,7 @@ pub fn serve(key: Keypair, listen: Multiaddr, jobs: &Sender<Job>) -> Result<(), 
         .block_on(run(key, listen, jobs.clone()))
 }
 
-async fn run(key: Keypair, listen: Multiaddr, jobs: Sender<Job>) -> Result<(), String> {
+async fn run(key: Keypair, listen: Multiaddr, jobs: SyncSender<Job>) -> Result<(), String> {
     let mut swarm = swarm(key)?;
     swarm.listen_on(listen).map_err(|error| error.to_string())?;
     let (replies, mut ready) = tokio::sync::mpsc::unbounded_channel();
@@ -199,7 +198,7 @@ async fn run(key: Keypair, listen: Multiaddr, jobs: Sender<Job>) -> Result<(), S
 }
 
 fn swarm(key: Keypair) -> Result<Swarm<Behaviour>, String> {
-    let identify = identify::Config::new("/logos/accounts/relay/1.0.0".into(), key.public())
+    let identify = identify::Config::new(PROTOCOL.into(), key.public())
         .with_agent_version(format!("account-relay/{}", env!("CARGO_PKG_VERSION")));
     let relay = request_response::Behaviour::new(
         [(StreamProtocol::new(PROTOCOL), ProtocolSupport::Inbound)],
@@ -224,29 +223,10 @@ fn swarm(key: Keypair) -> Result<Swarm<Behaviour>, String> {
 }
 
 /// The relay's answer to `request`, a submission.
-fn answer(request: &[u8], jobs: &Sender<Job>) -> RelayReply {
-    let request = match RelayRequest::from_bytes(request) {
-        Ok(request) => request,
-        Err(error) => return refusal(error.to_string()),
-    };
-    let (reply, answer) = mpsc::channel();
-    let submission = Submission {
-        request,
-        reply: Some(reply),
-        source: "p2p",
-    };
-    if jobs.send(Job::Submit(submission)).is_err() {
-        return refusal("the relay is stopping".into());
-    }
-    answer
-        .recv()
-        .unwrap_or_else(|_| refusal("the relay is stopping".into()))
-}
-
-fn refusal(reason: String) -> RelayReply {
-    RelayReply {
-        accepted: false,
-        reason: Some(reason),
+fn answer(request: &[u8], jobs: &SyncSender<Job>) -> RelayReply {
+    match RelayRequest::from_bytes(request) {
+        Ok(request) => ask(jobs, request, "p2p").unwrap_or_else(refusal),
+        Err(error) => refusal(error.to_string()),
     }
 }
 

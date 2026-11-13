@@ -6,7 +6,7 @@
 
 use std::{
     collections::{HashSet, VecDeque},
-    sync::mpsc::Sender,
+    sync::mpsc::SyncSender,
     thread,
     time::Duration,
 };
@@ -39,7 +39,7 @@ struct Message {
 
 /// Hands every submission on the relay topic that the node at `rest` receives to `jobs`, until
 /// the worker is gone.
-pub fn listen(rest: &str, jobs: &Sender<Job>) {
+pub fn listen(rest: &str, jobs: &SyncSender<Job>) {
     let rest = rest.trim_end_matches('/').to_owned();
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(REQUEST_TIMEOUT))

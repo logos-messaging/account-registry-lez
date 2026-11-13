@@ -2,17 +2,20 @@
 //!
 //! Everything a refused transaction would pay for is checked before sending: the log's
 //! signature, that it extends the log on chain, the registry's size limit, the relay's own
-//! limits and its balance. Submissions are handled one at a time, so two never race for the same
-//! account or the payer's nonce.
+//! limits and its balance. Submissions are checked one at a time and answered at once. The writes
+//! that pass go out one at a time, each once the previous one has landed, so two never race for
+//! the same account or the payer's nonce.
 
 use std::{
-    sync::mpsc::{Receiver, Sender},
-    time::{SystemTime, UNIX_EPOCH},
+    collections::VecDeque,
+    sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use account_log::{AccountAddr, SignedAccountLog};
 use account_registry_client::{
-    AccountId, LezAccountRegError, Registry,
+    AccountId, LezAccountRegError, PUBLISH_TIMEOUT, PreparedAppend, Registry,
     relay::{RelayReply, RelayRequest},
 };
 
@@ -48,11 +51,57 @@ pub struct Submission {
     pub source: &'static str,
 }
 
+/// How many jobs may wait for the worker; past that, submissions are refused as busy.
+pub const QUEUE: usize = 64;
+
+/// How often to look for the write in flight on chain.
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Hands `request` to the worker and waits for its verdict. `Err` if the relay is busy or
+/// stopping and never saw it.
+pub fn ask(
+    jobs: &SyncSender<Job>,
+    request: RelayRequest,
+    source: &'static str,
+) -> Result<RelayReply, String> {
+    let (reply, answer) = mpsc::channel();
+    let submission = Submission {
+        request,
+        reply: Some(reply),
+        source,
+    };
+    match jobs.try_send(Job::Submit(submission)) {
+        Ok(()) => answer.recv().map_err(|_| "the relay is stopping".into()),
+        Err(TrySendError::Full(_)) => Err("the relay is busy; try later".into()),
+        Err(TrySendError::Disconnected(_)) => Err("the relay is stopping".into()),
+    }
+}
+
+/// A reply refusing a submission for `reason`.
+#[must_use]
+pub const fn refusal(reason: String) -> RelayReply {
+    RelayReply {
+        accepted: false,
+        reason: Some(reason),
+    }
+}
+
 /// A submission that passed every check.
 struct Approved {
     addr: AccountAddr,
     log: SignedAccountLog,
     nullifier: Option<String>,
+    source: &'static str,
+}
+
+/// The write sent and not yet landed.
+struct InFlight {
+    addr: AccountAddr,
+    source: &'static str,
+    prepared: PreparedAppend,
+    /// The payer's balance before sending.
+    before: u128,
+    sent: Instant,
 }
 
 pub struct Relay {
@@ -61,11 +110,14 @@ pub struct Relay {
     auth: Auth,
     policy: Policy,
     ledger: Ledger,
+    approved: VecDeque<Approved>,
+    in_flight: Option<InFlight>,
+    next_poll: Instant,
 }
 
 impl Relay {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         registry: Registry,
         payer: AccountId,
         auth: Auth,
@@ -78,24 +130,98 @@ impl Relay {
             auth,
             policy,
             ledger,
+            approved: VecDeque::new(),
+            in_flight: None,
+            next_poll: Instant::now(),
         }
     }
 
-    /// Handles jobs until every sender is gone.
+    /// Handles jobs until every sender is gone and every approved write is settled.
     pub fn run(&mut self, jobs: &Receiver<Job>) {
-        for job in jobs {
+        let mut open = true;
+        while open || self.busy() {
+            let job = if !open {
+                thread::sleep(POLL_INTERVAL);
+                None
+            } else if self.busy() {
+                match jobs.recv_timeout(POLL_INTERVAL) {
+                    Ok(job) => Some(job),
+                    Err(RecvTimeoutError::Timeout) => None,
+                    Err(RecvTimeoutError::Disconnected) => {
+                        open = false;
+                        None
+                    }
+                }
+            } else {
+                jobs.recv().map_or_else(
+                    |_| {
+                        open = false;
+                        None
+                    },
+                    Some,
+                )
+            };
             match job {
-                Job::Submit(submission) => self.handle(submission),
-                Job::Status(reply) => {
+                Some(Job::Submit(submission)) => self.handle(submission),
+                Some(Job::Status(reply)) => {
                     let _gone = reply.send(self.status());
                 }
+                None => {}
+            }
+            self.advance();
+        }
+    }
+
+    fn busy(&self) -> bool {
+        self.in_flight.is_some() || !self.approved.is_empty()
+    }
+
+    /// Settles the write in flight once it lands or fails, then sends the next approved one.
+    fn advance(&mut self) {
+        if let Some(flight) = &self.in_flight {
+            if Instant::now() < self.next_poll {
+                return;
+            }
+            self.next_poll = Instant::now() + POLL_INTERVAL;
+            let outcome = self
+                .registry
+                .fetch(&flight.addr)
+                .and_then(|stored| flight.prepared.landed(stored.as_ref()));
+            let failure = match outcome {
+                Ok(true) => None,
+                Err(LezAccountRegError::Conflict) => Some(LezAccountRegError::Conflict),
+                _ if flight.sent.elapsed() < PUBLISH_TIMEOUT => return,
+                _ => Some(LezAccountRegError::Timeout),
+            };
+            let flight = self.in_flight.take().expect("a write is in flight");
+            let cost = self.settle(flight.before);
+            match failure {
+                None => eprintln!(
+                    "published {} (from {}), cost {cost}",
+                    flight.addr, flight.source
+                ),
+                Some(error) => {
+                    eprintln!("failed {} (from {}): {error}", flight.addr, flight.source)
+                }
+            }
+        }
+        while self.in_flight.is_none()
+            && let Some(approved) = self.approved.pop_front()
+        {
+            let (addr, source) = (approved.addr.clone(), approved.source);
+            match self.send(approved) {
+                Ok(flight) => {
+                    self.next_poll = Instant::now() + POLL_INTERVAL;
+                    self.in_flight = Some(flight);
+                }
+                Err(error) => eprintln!("failed {addr} (from {source}): {error}"),
             }
         }
     }
 
     fn handle(&mut self, submission: Submission) {
         let addr = submission.request.addr.clone();
-        let checked = self.check(&submission.request);
+        let checked = self.check(&submission.request, submission.source);
         if let Some(reply) = submission.reply {
             let answer = match &checked {
                 Ok(_) => RelayReply {
@@ -110,23 +236,28 @@ impl Relay {
             let _gone = reply.send(answer);
         }
         match checked {
-            Ok(approved) => match self.publish(&approved) {
-                Ok(cost) => eprintln!("published {addr} (from {}), cost {cost}", submission.source),
-                Err(error) => eprintln!("failed {addr} (from {}): {error}", submission.source),
-            },
+            Ok(approved) => self.approved.push_back(approved),
             Err(reason) => eprintln!("refused {addr} (from {}): {reason}", submission.source),
         }
     }
 
     /// Checks `request` against everything that would make the write fail or the relay
     /// unwilling, without spending anything.
-    fn check(&self, request: &RelayRequest) -> Result<Approved, String> {
+    fn check(&self, request: &RelayRequest, source: &'static str) -> Result<Approved, String> {
         let nullifier = self.auth.verify(request)?;
         if nullifier.as_deref().is_some_and(|n| self.ledger.used(n)) {
             return Err("these credentials were already used".into());
         }
 
         let (addr, log) = request.decode().map_err(|error| error.to_string())?;
+        if self
+            .in_flight
+            .as_ref()
+            .is_some_and(|flight| flight.addr == addr)
+            || self.approved.iter().any(|approved| approved.addr == addr)
+        {
+            return Err("a write for this account is on its way; wait for it".into());
+        }
         if log.payload.as_bytes().len() > self.policy.max_log_bytes {
             return Err(format!(
                 "the relay sponsors logs up to {} bytes",
@@ -155,6 +286,8 @@ impl Relay {
             .map_err(|error| error.to_string())?;
 
         let (hour, day) = self.ledger.recent(now());
+        let waiting = self.approved.len();
+        let (hour, day) = (hour + waiting, day + waiting);
         if hour >= self.policy.max_per_hour || day >= self.policy.max_per_day {
             return Err("the relay is at its limit; try later, or pay yourself".into());
         }
@@ -170,22 +303,55 @@ impl Relay {
             addr,
             log,
             nullifier,
+            source,
         })
     }
 
-    /// Publishes `approved`, recording it before sending, and returns what it cost.
-    fn publish(&mut self, approved: &Approved) -> Result<u128, LezAccountRegError> {
+    /// Sends `approved`, recording it first: a write that is sent pays even if it then fails.
+    fn send(&mut self, approved: Approved) -> Result<InFlight, LezAccountRegError> {
         let before = self.registry.balance(self.payer)?;
-        let key = approved.addr.to_string();
+        let prepared = self
+            .registry
+            .prepare_append(&approved.addr, &approved.log)?;
         self.ledger
-            .record(&key, approved.nullifier.as_deref(), now())
+            .record(
+                &approved.addr.to_string(),
+                approved.nullifier.as_deref(),
+                now(),
+            )
             .map_err(|error| LezAccountRegError::Relay(error.to_string()))?;
-        let published = self.registry.publish(&approved.addr, &approved.log);
-        let cost = before.saturating_sub(self.registry.balance(self.payer)?);
-        self.ledger
-            .spend(cost)
-            .map_err(|error| LezAccountRegError::Relay(error.to_string()))?;
-        published.map(|()| cost)
+        if let Err(error) = self.registry.send_append(&prepared) {
+            self.settle(before);
+            return Err(error);
+        }
+        Ok(InFlight {
+            addr: approved.addr,
+            source: approved.source,
+            prepared,
+            before,
+            sent: Instant::now(),
+        })
+    }
+
+    /// Adds what the payer spent since its balance was `before` to the ledger, and returns it.
+    fn settle(&mut self, before: u128) -> u128 {
+        let after = self.registry.balance(self.payer).unwrap_or(before);
+        let cost = before.saturating_sub(after);
+        if let Err(error) = self.ledger.spend(cost) {
+            eprintln!("ledger: {error}");
+        }
+        cost
+    }
+
+    /// Sends `approved` and waits for it to land, returning what it cost.
+    #[cfg(test)]
+    fn publish(&mut self, approved: Approved) -> Result<u128, LezAccountRegError> {
+        let flight = self.send(approved)?;
+        let landed = self
+            .registry
+            .await_append(&flight.prepared, PUBLISH_TIMEOUT);
+        let cost = self.settle(flight.before);
+        landed.map(|()| cost)
     }
 
     /// The relay's state, for `GET /v1/status`.
@@ -271,8 +437,8 @@ mod tests {
     }
 
     fn sponsor(relay: &mut Relay, request: &RelayRequest) -> Result<u128, String> {
-        let approved = relay.check(request)?;
-        relay.publish(&approved).map_err(|error| error.to_string())
+        let approved = relay.check(request, "test")?;
+        relay.publish(approved).map_err(|error| error.to_string())
     }
 
     #[test]
@@ -282,16 +448,25 @@ mod tests {
 
         let first = new_account("Saro", RelayAuth::default());
         assert!(sponsor(&mut relay, &first).unwrap() > 0);
-        assert_eq!(relay.check(&first).err().unwrap(), "already published");
+        assert_eq!(
+            relay.check(&first, "test").err().unwrap(),
+            "already published"
+        );
 
         let second = new_account("Ana", RelayAuth::default());
         assert!(sponsor(&mut relay, &second).is_ok());
         let third = new_account("Ben", RelayAuth::default());
-        assert!(relay.check(&third).err().unwrap().contains("at its limit"));
+        assert!(
+            relay
+                .check(&third, "test")
+                .err()
+                .unwrap()
+                .contains("at its limit")
+        );
 
         let mut forged = new_account("Eve", RelayAuth::default());
         forged.addr = new_account("Joe", RelayAuth::default()).addr;
-        assert!(relay.check(&forged).is_err());
+        assert!(relay.check(&forged, "test").is_err());
     }
 
     /// The log `key` signs after appending `names` to `draft`.
@@ -324,7 +499,7 @@ mod tests {
         let third = grow(&key, &mut draft, "Saro Marr");
         assert!(
             relay
-                .check(&third)
+                .check(&third, "test")
                 .err()
                 .unwrap()
                 .contains("2 updates a day")
@@ -337,7 +512,7 @@ mod tests {
         let relay = self::relay(Auth::new(vec![Box::new(Open)]), fresh);
         assert!(
             relay
-                .check(&third)
+                .check(&third, "test")
                 .err()
                 .unwrap()
                 .contains("new accounts only")
@@ -355,7 +530,7 @@ mod tests {
         let request = new_account("Saro", RelayAuth::default());
         assert!(
             relay_broke
-                .check(&request)
+                .check(&request, "test")
                 .err()
                 .unwrap()
                 .contains("out of funds")
@@ -368,7 +543,7 @@ mod tests {
         let relay_tight = relay(Auth::new(vec![Box::new(Open)]), tight);
         assert!(
             relay_tight
-                .check(&request)
+                .check(&request, "test")
                 .err()
                 .unwrap()
                 .contains("up to 8 bytes")
@@ -378,16 +553,16 @@ mod tests {
             Auth::new(vec![Box::new(SharedToken("s3cret".into()))]),
             policy(),
         );
-        assert!(gated.check(&request).is_err());
+        assert!(gated.check(&request, "test").is_err());
         let wrong = RelayAuth {
             kind: "token".into(),
             payload: "guess".into(),
         };
-        assert!(gated.check(&new_account("Ana", wrong)).is_err());
+        assert!(gated.check(&new_account("Ana", wrong), "test").is_err());
         let right = RelayAuth {
             kind: "token".into(),
             payload: "s3cret".into(),
         };
-        assert!(gated.check(&new_account("Ben", right)).is_ok());
+        assert!(gated.check(&new_account("Ben", right), "test").is_ok());
     }
 }

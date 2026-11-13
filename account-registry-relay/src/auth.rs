@@ -39,12 +39,17 @@ impl Scheme for SharedToken {
     }
 
     fn verify(&self, request: &RelayRequest) -> Result<Option<String>, String> {
-        if request.auth.payload == self.0 {
+        if same(request.auth.payload.as_bytes(), self.0.as_bytes()) {
             Ok(None)
         } else {
             Err("wrong token".into())
         }
     }
+}
+
+/// Whether `a` and `b` are equal, in time that does not depend on where they differ.
+fn same(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0, |diff, (x, y)| diff | (x ^ y)) == 0
 }
 
 /// The schemes a relay accepts.

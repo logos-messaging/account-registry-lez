@@ -1,8 +1,8 @@
 //! `account-relay`: publishes other accounts' signed logs to the registry and pays the fee, so an
 //! account can be published before its owner holds any funds.
 //!
-//! Submissions arrive over Logos Delivery, through a `logosdeliverynode`'s REST endpoint, and
-//! over HTTP. Anyone can run a relay: a log authorizes its own write, so a relay can only decline
+//! Submissions arrive over libp2p, as Logos Core's `libp2p_module` sends them, over HTTP, and
+//! over Logos Delivery, through a `logosdeliverynode`'s REST endpoint. Anyone can run a relay: a log authorizes its own write, so a relay can only decline
 //! one, never forge or alter it. The payer's key comes from `ACCOUNT_REGISTRY_PAYER`.
 
 use std::{path::PathBuf, process::ExitCode, sync::mpsc, thread};
@@ -13,7 +13,7 @@ use clap::{Parser, ValueEnum};
 use crate::{
     auth::{Auth, Open, Scheme, SharedToken},
     ledger::Ledger,
-    relay::{Policy, Relay},
+    relay::{Policy, QUEUE, Relay},
 };
 
 mod auth;
@@ -122,7 +122,7 @@ fn run(args: Args) -> Result<(), String> {
         args.program, args.sequencer
     );
 
-    let (jobs, queue) = mpsc::channel();
+    let (jobs, queue) = mpsc::sync_channel(QUEUE);
     let mut workers = Vec::new();
     if let Some(address) = args.http {
         let server = tiny_http::Server::http(&address).map_err(|error| error.to_string())?;
