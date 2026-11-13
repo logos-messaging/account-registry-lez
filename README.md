@@ -161,6 +161,17 @@ curl -s 127.0.0.1:8650/v1/status
 cargo run -p account-registry-client --example relay_publish -- http://127.0.0.1:8650
 ```
 
+`account-registry-relay/compose.yaml` runs a relay on the public testnet next to a Logos Delivery
+node on `logos.test`. It exposes libp2p on port 9010, HTTP on `127.0.0.1:8650`, and the node's
+p2p port 30303:
+
+```sh
+cd account-registry-relay
+cp .env.example .env   # set ACCOUNT_REGISTRY_PAYER
+docker compose up -d
+docker compose logs relay | grep peer   # the peer id clients dial
+```
+
 ## Versions
 
 The version follows LEZ's: registry `0.3.x` is built for LEZ v0.3 and `0.4.x` for LEZ v0.4, and

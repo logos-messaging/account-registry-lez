@@ -1,0 +1,55 @@
+# An account relay for the public testnet: the relay, and the Logos Delivery node it listens
+# through. Copy .env.example to .env, set ACCOUNT_REGISTRY_PAYER, then `docker compose up -d`.
+name: account-relay
+
+services:
+  delivery:
+    image: wakuorg/nwaku:v0.39.2
+    command:
+      - --entry-layer=messaging
+      - --mode=core
+      - --preset=logos.test
+      - --rest=true
+      - --rest-address=0.0.0.0
+      - --rest-port=8645
+      - --local-storage-path=/data
+    ports:
+      - "30303:30303"
+    volumes:
+      - delivery-data:/data
+    restart: unless-stopped
+
+  relay:
+    build:
+      context: ..
+      dockerfile: account-registry-relay/Dockerfile
+    image: account-relay:local
+    depends_on:
+      - delivery
+    environment:
+      SEQUENCER_URL: ${SEQUENCER_URL:-https://testnet.lez.logos.co}
+      ACCOUNT_REGISTRY_PROGRAM: ${ACCOUNT_REGISTRY_PROGRAM:-BHNNfnhPMNMZ7N3oAtbu1iM1HkFyraWx2UjBvxhj8wTa}
+      ACCOUNT_REGISTRY_PAYER: ${ACCOUNT_REGISTRY_PAYER:-}
+      ACCOUNT_RELAY_TOKEN: ${ACCOUNT_RELAY_TOKEN:-}
+      ACCOUNT_RELAY_P2P: /ip4/0.0.0.0/tcp/9010
+      ACCOUNT_RELAY_HTTP: 0.0.0.0:8650
+      ACCOUNT_RELAY_DELIVERY: http://delivery:8645
+    command:
+      - --auth=${ACCOUNT_RELAY_AUTH:-open}
+      - --max-per-account-per-day=${ACCOUNT_RELAY_MAX_PER_ACCOUNT_PER_DAY:-3}
+      - --max-per-hour=${ACCOUNT_RELAY_MAX_PER_HOUR:-30}
+      - --max-per-day=${ACCOUNT_RELAY_MAX_PER_DAY:-200}
+    ports:
+      - "9010:9010"
+      - "127.0.0.1:8650:8650"
+    volumes:
+      - relay-state:/state
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8650/v1/status"]
+      interval: 30s
+      timeout: 10s
+    restart: unless-stopped
+
+volumes:
+  delivery-data:
+  relay-state:
