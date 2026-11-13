@@ -29,6 +29,7 @@ the public testnet runs.
 | `account-registry-guest` | `account-registry-lezprogram/methods/guest` | The zkVM entry point. Its own workspace, so its `Cargo.lock` alone decides what goes into the image |
 | `account-registry-client` | `account-registry-client` | Blocking JSON-RPC client (no async runtime) implementing libchat's `AccountProvider` and `AccountPublisher`. Does not link the guest |
 | `account-registry-cli` | `account-registry-cli` | The `account-registry` binary: `keygen`, `deploy`, `fetch`, `balance` |
+| `account-registry-relay` | `account-registry-relay` | The `account-relay` service: publishes other accounts' signed logs and pays the fee |
 
 ## Usage
 
@@ -120,6 +121,36 @@ To publish a test account to a deployed registry, and read any account's log bac
 source .env
 cargo run -p account-registry-client --example account_publish "$SEQUENCER_URL"
 account-registry fetch <account address, hex>
+```
+
+## Account relay
+
+A new account holds no funds, and the registry charges a fee for every write. An account relay
+publishes the account's log for it and pays the fee. It can neither forge nor alter a log, since
+the log's own signature authorizes the write, so anyone can run one; a relay can only decline.
+
+A client signs its log and sends it to a relay over Logos Delivery, on the content topic
+`/logos-accounts/1/relay-submit/json`, or over HTTP to `POST /v1/submit`. It then waits for the
+log on chain, and pays the fee itself if it does not appear. `account_registry_client::relay` has
+the format and both ways of sending.
+
+The relay checks everything a failed write would pay for before sending: the signature, that the
+log extends the one on chain, the size limits, its own quotas and its balance. By default it
+sponsors one write per new account, logs up to 4 KiB, at most 30 an hour and 200 a day, and
+refuses everything below 70M units. Credentials are pluggable; the open and shared-token schemes
+here are placeholders for a test network.
+
+```sh
+# the relay's payer, funded; the registry from Deployments above
+export ACCOUNT_REGISTRY_PAYER=<key> ACCOUNT_REGISTRY_PROGRAM=<program account>
+# a logosdeliverynode with the Messaging API on :8645, e.g. wakuorg/nwaku:v0.39.2 with
+# --entry-layer=messaging --preset=logos.test --rest=true
+cargo run -p account-registry-relay -- --sequencer https://testnet.lez.logos.co \
+  --http 127.0.0.1:8650 --delivery http://127.0.0.1:8645
+curl -s 127.0.0.1:8650/v1/status
+
+# a client with no funds
+cargo run -p account-registry-client --example relay_publish -- http://127.0.0.1:8650
 ```
 
 ## Versions

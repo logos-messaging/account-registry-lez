@@ -26,4 +26,6 @@ pub enum LezAccountRegError {
     Conflict,
     #[error("the transaction did not take effect in time")]
     Timeout,
+    #[error("relay submission: {0}")]
+    Relay(String),
 }

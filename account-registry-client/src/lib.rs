@@ -34,6 +34,7 @@ pub use error::LezAccountRegError;
 pub use lee::{Account, AccountId, PrivateKey, ProgramShardSelector};
 
 mod error;
+pub mod relay;
 mod rpc;
 
 /// How often to look for a submitted transaction's effect.
