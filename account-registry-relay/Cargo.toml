@@ -18,5 +18,11 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
 tiny_http.workspace = true
+libp2p.workspace = true
+libp2p-mplex.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+tokio.workspace = true
+hex.workspace = true
 ureq.workspace = true
 url.workspace = true

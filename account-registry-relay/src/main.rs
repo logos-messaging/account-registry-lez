@@ -20,6 +20,7 @@ mod auth;
 mod delivery;
 mod http;
 mod ledger;
+mod p2p;
 mod relay;
 
 /// The payer `./run-local-sequencer` funds at genesis. Never use it on a real network.
@@ -45,7 +46,12 @@ struct Args {
     #[arg(long, env = "ACCOUNT_RELAY_DELIVERY")]
     delivery: Option<String>,
 
-    /// Where the relay keeps its record of what it sponsored.
+    /// Take submissions over libp2p on this address, e.g. /ip4/0.0.0.0/tcp/9010, as Logos
+    /// Core's libp2p_module sends them. The relay's peer id is printed on start.
+    #[arg(long, env = "ACCOUNT_RELAY_P2P")]
+    p2p: Option<libp2p::Multiaddr>,
+
+    /// Where the relay keeps its record of what it sponsored, and its libp2p key.
     #[arg(long, env = "ACCOUNT_RELAY_STATE", default_value = "relay-state")]
     state: PathBuf,
 
@@ -53,13 +59,13 @@ struct Args {
     #[arg(long, value_enum, default_value_t = AuthKind::Open)]
     auth: AuthKind,
 
-    /// Sponsored writes per account, ever.
-    #[arg(long, default_value_t = 1)]
-    max_writes_per_account: u32,
+    /// Sponsored writes per account in any 24 hours, appends included.
+    #[arg(long, default_value_t = 3)]
+    max_per_account_per_day: usize,
 
-    /// Also sponsor appends to accounts that already have a log.
+    /// Sponsor only accounts with nothing published yet.
     #[arg(long)]
-    existing_accounts: bool,
+    new_accounts_only: bool,
 
     /// The largest log payload sponsored, in bytes.
     #[arg(long, default_value_t = 4096)]
@@ -93,8 +99,8 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Args) -> Result<(), String> {
-    if args.http.is_none() && args.delivery.is_none() {
-        return Err("take submissions somewhere: set --http, --delivery or both".into());
+    if args.http.is_none() && args.delivery.is_none() && args.p2p.is_none() {
+        return Err("take submissions somewhere: set --http, --p2p or --delivery".into());
     }
     let payer = payer_key(&args.sequencer)?;
     let payer_id = signer_id(&payer);
@@ -104,8 +110,8 @@ fn run(args: Args) -> Result<(), String> {
     let auth = Auth::new(vec![scheme(args.auth)?]);
     let ledger = Ledger::open(&args.state).map_err(|error| error.to_string())?;
     let policy = Policy {
-        max_writes_per_account: args.max_writes_per_account,
-        new_accounts_only: !args.existing_accounts,
+        max_per_account_per_day: args.max_per_account_per_day,
+        new_accounts_only: args.new_accounts_only,
         max_log_bytes: args.max_log_bytes,
         max_per_hour: args.max_per_hour,
         max_per_day: args.max_per_day,
@@ -123,6 +129,15 @@ fn run(args: Args) -> Result<(), String> {
         eprintln!("http: listening on {address}");
         let jobs = jobs.clone();
         workers.push(thread::spawn(move || http::serve(&server, &jobs)));
+    }
+    if let Some(listen) = args.p2p {
+        let key = p2p::identity(&args.state).map_err(|error| error.to_string())?;
+        let jobs = jobs.clone();
+        workers.push(thread::spawn(move || {
+            if let Err(error) = p2p::serve(key, listen, &jobs) {
+                eprintln!("p2p: {error}");
+            }
+        }));
     }
     if let Some(rest) = args.delivery {
         let jobs = jobs.clone();

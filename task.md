@@ -60,9 +60,11 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 
 ### Account relay
 - `account-relay` publishes other accounts' signed logs and pays the fee, so a new account can be published before its owner holds funds. Anyone can run one: the log authorizes its own write, so a relay can only decline it.
-- Submissions arrive over Logos Delivery on `/logos-accounts/1/relay-submit/json`, through a `logosdeliverynode`'s Messaging API REST endpoint, and over HTTP on `POST /v1/submit`. Both carry the same JSON: version, address, the signed log in base64, and credentials. HTTP answers once the relay has checked a submission; Delivery has no answer, so a client waits for its log on chain and falls back to paying itself.
+- Submissions arrive over libp2p on `/logos/accounts/relay/1.0.0`, over HTTP on `POST /v1/submit`, and over Logos Delivery on `/logos-accounts/1/relay-submit/json`, through a `logosdeliverynode`'s Messaging API REST endpoint. All carry the same JSON: version, address, the signed log in base64, and credentials. libp2p and HTTP answer once the relay has checked a submission; Delivery has no answer. Either way a client waits for its log on chain and falls back to paying itself.
+- The libp2p transport is what Logos Core's `libp2p_module` speaks with `protocolRequest`: TCP, Noise and mplex, the only muxer it offers over TCP; one request and one reply, each framed by an unsigned-varint length, the request read by its length since the client keeps its side open until the reply. The relay's identity is a secp256k1 key in its state directory, so its peer id stays the same across restarts.
+- On `logos.test`, a delivery node without an RLN membership cannot send, so new users reach the relay over libp2p or HTTP.
 - One worker handles every submission in turn, so writes never race for an account or the payer's nonce. It checks everything a refused write would pay for before sending, and records a write in its ledger before sending it, since a sent write pays even if it fails.
-- Limits: sponsored writes per account (1 by default), new accounts only, log size (4 KiB), per hour and per day, and a minimum payer balance. The ledger keeps counts and used credentials on disk.
+- Limits: sponsored writes per account in any 24 hours (3), appends included, log size (4 KiB), per hour and per day overall, and a minimum payer balance. `--new-accounts-only` restricts it to first logs. The ledger keeps counts and used credentials on disk.
 - Credentials are a `Scheme` per `kind`, after the RLN membership allocation service's auth vectors. A scheme may return a nullifier, sponsored once. The open and shared-token schemes are placeholders.
 
 ### Versions and program ID

@@ -21,8 +21,8 @@ use crate::{auth::Auth, ledger::Ledger};
 /// What the relay is willing to pay for.
 #[derive(Debug, Clone)]
 pub struct Policy {
-    /// Sponsored writes per account, ever. 1 sponsors an account's first log only.
-    pub max_writes_per_account: u32,
+    /// Sponsored writes per account in any 24 hours, appends included.
+    pub max_per_account_per_day: usize,
     /// Sponsor only accounts with nothing published yet.
     pub new_accounts_only: bool,
     /// The largest log payload sponsored, in bytes.
@@ -140,8 +140,12 @@ impl Relay {
         if stored.as_ref() == Some(&log) {
             return Err("already published".into());
         }
-        if self.ledger.writes(&addr.to_string()) >= self.policy.max_writes_per_account {
-            return Err("the relay already sponsored this account".into());
+        if self.ledger.writes_today(&addr.to_string(), now()) >= self.policy.max_per_account_per_day
+        {
+            return Err(format!(
+                "the relay sponsors {} updates a day per account; try later, or pay yourself",
+                self.policy.max_per_account_per_day
+            ));
         }
         if stored.is_some() && self.policy.new_accounts_only {
             return Err("the relay sponsors new accounts only".into());
@@ -197,7 +201,7 @@ impl Relay {
             "sponsoredLastDay": day,
             "spent": self.ledger.spent().to_string(),
             "limits": {
-                "maxWritesPerAccount": self.policy.max_writes_per_account,
+                "maxPerAccountPerDay": self.policy.max_per_account_per_day,
                 "newAccountsOnly": self.policy.new_accounts_only,
                 "maxLogBytes": self.policy.max_log_bytes,
                 "maxPerHour": self.policy.max_per_hour,
@@ -216,7 +220,8 @@ fn now() -> u64 {
 #[cfg(test)]
 mod tests {
     //! Against a running sequencer with the registry deployed: `./run-local-sequencer`, then
-    //! `account-registry deploy`, then this with `ACCOUNT_REGISTRY_PROGRAM` set.
+    //! `account-registry deploy`, then this with `ACCOUNT_REGISTRY_PROGRAM` set and
+    //! `--test-threads=1`: every test pays from the same payer, whose nonce they would share.
 
     use account_log::{AccountLogDraft, Context, Ed25519SigningKey, EntryData};
     use account_registry_client::{
@@ -233,8 +238,8 @@ mod tests {
 
     fn policy() -> Policy {
         Policy {
-            max_writes_per_account: 1,
-            new_accounts_only: true,
+            max_per_account_per_day: 2,
+            new_accounts_only: false,
             max_log_bytes: 4096,
             max_per_hour: 2,
             max_per_day: 10,
@@ -287,6 +292,56 @@ mod tests {
         let mut forged = new_account("Eve", RelayAuth::default());
         forged.addr = new_account("Joe", RelayAuth::default()).addr;
         assert!(relay.check(&forged).is_err());
+    }
+
+    /// The log `key` signs after appending `names` to `draft`.
+    fn grow(key: &Ed25519SigningKey, draft: &mut AccountLogDraft, name: &str) -> RelayRequest {
+        let data = EntryData::Text(name.into());
+        draft
+            .add(Context::literal("profile.displayname"), data)
+            .unwrap();
+        let log = sign(key, draft.log()).unwrap();
+        RelayRequest::new(
+            &AccountAddr::from(key.verifying_key()),
+            &log,
+            RelayAuth::default(),
+        )
+    }
+
+    #[test]
+    #[ignore = "needs a running sequencer and a deployed registry"]
+    fn sponsors_appends_up_to_its_daily_limit_per_account() {
+        let roomy = Policy {
+            max_per_hour: 10,
+            ..policy()
+        };
+        let mut relay = relay(Auth::new(vec![Box::new(Open)]), roomy);
+        let key = Ed25519SigningKey::generate();
+        let mut draft = AccountLogDraft::new();
+
+        assert!(sponsor(&mut relay, &grow(&key, &mut draft, "Saro")).is_ok());
+        assert!(sponsor(&mut relay, &grow(&key, &mut draft, "Saro M.")).is_ok());
+        let third = grow(&key, &mut draft, "Saro Marr");
+        assert!(
+            relay
+                .check(&third)
+                .err()
+                .unwrap()
+                .contains("2 updates a day")
+        );
+
+        let fresh = Policy {
+            new_accounts_only: true,
+            ..policy()
+        };
+        let relay = self::relay(Auth::new(vec![Box::new(Open)]), fresh);
+        assert!(
+            relay
+                .check(&third)
+                .err()
+                .unwrap()
+                .contains("new accounts only")
+        );
     }
 
     #[test]

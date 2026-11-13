@@ -13,8 +13,8 @@ const DAY: u64 = 24 * HOUR;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct State {
-    /// Sponsored writes per account address.
-    writes: BTreeMap<String, u32>,
+    /// When each sponsored write per account address was sent, for the past day.
+    writes: BTreeMap<String, Vec<u64>>,
     /// When each sponsored write was sent, in seconds since the epoch, for the past day.
     sent: Vec<u64>,
     /// Credentials already used.
@@ -55,9 +55,13 @@ impl Ledger {
         }
     }
 
+    /// Sponsored writes for `addr` sent in the day before `now`.
     #[must_use]
-    pub fn writes(&self, addr: &str) -> u32 {
-        self.state.writes.get(addr).copied().unwrap_or(0)
+    pub fn writes_today(&self, addr: &str, now: u64) -> usize {
+        self.state
+            .writes
+            .get(addr)
+            .map_or(0, |sent| sent.iter().filter(|&&at| at + DAY > now).count())
     }
 
     #[must_use]
@@ -86,7 +90,12 @@ impl Ledger {
     /// Records a sponsored write sent at `now`, before it lands: a write that is sent pays even
     /// if it then fails.
     pub fn record(&mut self, addr: &str, nullifier: Option<&str>, now: u64) -> io::Result<()> {
-        *self.state.writes.entry(addr.to_owned()).or_default() += 1;
+        let sent = self.state.writes.entry(addr.to_owned()).or_default();
+        sent.retain(|&at| at + DAY > now);
+        sent.push(now);
+        self.state
+            .writes
+            .retain(|_, sent| sent.iter().any(|&at| at + DAY > now));
         if let Some(nullifier) = nullifier {
             self.state.nullifiers.insert(nullifier.to_owned());
         }
@@ -123,7 +132,7 @@ mod tests {
         ledger.spend(26).unwrap();
 
         let ledger = Ledger::open(&dir).unwrap();
-        assert_eq!(ledger.writes("aa"), 1);
+        assert_eq!(ledger.writes_today("aa", 1_000), 1);
         assert!(ledger.used("token:x"));
         assert_eq!(ledger.spent(), 26);
         fs::remove_dir_all(dir).unwrap();
@@ -134,7 +143,10 @@ mod tests {
         let mut ledger = Ledger::in_memory();
         ledger.record("aa", None, 0).unwrap();
         ledger.record("bb", None, 2 * HOUR).unwrap();
-        assert_eq!(ledger.recent(2 * HOUR), (1, 2));
-        assert_eq!(ledger.recent(DAY + 1), (0, 1));
+        ledger.record("bb", None, 3 * HOUR).unwrap();
+        assert_eq!(ledger.recent(3 * HOUR), (1, 3));
+        assert_eq!(ledger.recent(DAY + 1), (0, 2));
+        assert_eq!(ledger.writes_today("bb", 3 * HOUR), 2);
+        assert_eq!(ledger.writes_today("aa", DAY + 1), 0);
     }
 }

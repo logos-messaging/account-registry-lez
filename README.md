@@ -129,15 +129,22 @@ A new account holds no funds, and the registry charges a fee for every write. An
 publishes the account's log for it and pays the fee. It can neither forge nor alter a log, since
 the log's own signature authorizes the write, so anyone can run one; a relay can only decline.
 
-A client signs its log and sends it to a relay over Logos Delivery, on the content topic
-`/logos-accounts/1/relay-submit/json`, or over HTTP to `POST /v1/submit`. It then waits for the
-log on chain, and pays the fee itself if it does not appear. `account_registry_client::relay` has
-the format and both ways of sending.
+A client signs its log and sends it to a relay in one of three ways:
+
+- over libp2p, on `/logos/accounts/relay/1.0.0`, as Logos Core's `libp2p_module` sends with
+  `protocolRequest`, the way the RLN membership allocation service is reached;
+- over HTTP, to `POST /v1/submit`;
+- over Logos Delivery, on the content topic `/logos-accounts/1/relay-submit/json`. On `logos.test`
+  a node cannot send without an RLN membership, so this path suits clients that hold one.
+
+The first two answer once the relay has checked the submission. The client then waits for the log
+on chain, and pays the fee itself if it does not appear. `account_registry_client::relay` has the
+format, and sending it over HTTP or Delivery.
 
 The relay checks everything a failed write would pay for before sending: the signature, that the
 log extends the one on chain, the size limits, its own quotas and its balance. By default it
-sponsors one write per new account, logs up to 4 KiB, at most 30 an hour and 200 a day, and
-refuses everything below 70M units. Credentials are pluggable; the open and shared-token schemes
+sponsors up to 3 updates per account a day, appends included, logs up to 4 KiB, at most 30 an
+hour and 200 a day overall, and refuses everything below 70M units. Credentials are pluggable; the open and shared-token schemes
 here are placeholders for a test network.
 
 ```sh
@@ -146,7 +153,8 @@ export ACCOUNT_REGISTRY_PAYER=<key> ACCOUNT_REGISTRY_PROGRAM=<program account>
 # a logosdeliverynode with the Messaging API on :8645, e.g. wakuorg/nwaku:v0.39.2 with
 # --entry-layer=messaging --preset=logos.test --rest=true
 cargo run -p account-registry-relay -- --sequencer https://testnet.lez.logos.co \
-  --http 127.0.0.1:8650 --delivery http://127.0.0.1:8645
+  --p2p /ip4/0.0.0.0/tcp/9010 --http 127.0.0.1:8650 --delivery http://127.0.0.1:8645
+# prints its libp2p peer id; the key is kept in relay-state/node_key.hex
 curl -s 127.0.0.1:8650/v1/status
 
 # a client with no funds
