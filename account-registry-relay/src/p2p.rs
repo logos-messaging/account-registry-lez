@@ -1,18 +1,23 @@
 //! Submissions over libp2p: one request and one reply on `/logos/accounts/relay/1.0.0`, as Logos
 //! Core's `libp2p_module` sends them with `protocolRequest`. That is how the RLN membership
-//! allocation service is reached too, and unlike Logos Delivery it needs no RLN membership.
+//! allocation service is reached too.
 //!
 //! The request is a [`RelayRequest`] and the reply a [`RelayReply`], both as JSON, each framed by
 //! an unsigned-varint length. The client does not close its side before reading the reply, so a
 //! request is read by its length, never to the end of the stream. The connection is TCP with
 //! Noise and mplex, the only muxer `libp2p_module` offers over TCP.
 
-use std::{fs, io, path::Path, sync::mpsc::SyncSender, time::Duration};
+use std::{
+    fs, io,
+    path::Path,
+    sync::{Arc, mpsc::SyncSender},
+    time::Duration,
+};
 
 use account_registry_client::relay::{RelayReply, RelayRequest};
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, StreamExt};
 use libp2p::{
-    Multiaddr, StreamProtocol, Swarm, identify,
+    Multiaddr, PeerId, StreamProtocol, Swarm, identify,
     identity::{Keypair, secp256k1},
     noise, ping,
     request_response::{self, ProtocolSupport},
@@ -20,7 +25,11 @@ use libp2p::{
     tcp,
 };
 
-use crate::relay::{Job, ask, refusal};
+use crate::{
+    metrics::Metrics,
+    relay::{Reason, Refusal, Submission, ask},
+    transport::Transport,
+};
 
 /// The relay's protocol.
 pub const PROTOCOL: &str = "/logos/accounts/relay/1.0.0";
@@ -152,17 +161,45 @@ pub fn identity(dir: &Path) -> io::Result<Keypair> {
     }
 }
 
-/// Serves the relay protocol on `listen` until the worker is gone.
-pub fn serve(key: Keypair, listen: Multiaddr, jobs: &SyncSender<Job>) -> Result<(), String> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| error.to_string())?
-        .block_on(run(key, listen, jobs.clone()))
+/// The libp2p transport: serves the relay protocol on `listen` as `key`'s peer.
+pub struct P2p {
+    key: Keypair,
+    listen: Multiaddr,
+    metrics: Arc<Metrics>,
 }
 
-async fn run(key: Keypair, listen: Multiaddr, jobs: SyncSender<Job>) -> Result<(), String> {
-    let mut swarm = swarm(key)?;
+impl P2p {
+    #[must_use]
+    pub const fn new(key: Keypair, listen: Multiaddr, metrics: Arc<Metrics>) -> Self {
+        Self {
+            key,
+            listen,
+            metrics,
+        }
+    }
+}
+
+impl Transport for P2p {
+    fn name(&self) -> &'static str {
+        "p2p"
+    }
+
+    fn serve(self: Box<Self>, jobs: SyncSender<Submission>) -> Result<(), String> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| error.to_string())?
+            .block_on(run(*self, jobs))
+    }
+}
+
+async fn run(p2p: P2p, jobs: SyncSender<Submission>) -> Result<(), String> {
+    let P2p {
+        key,
+        listen,
+        metrics,
+    } = p2p;
+    let mut swarm = swarm(key, ProtocolSupport::Inbound)?;
     swarm.listen_on(listen).map_err(|error| error.to_string())?;
     let (replies, mut ready) = tokio::sync::mpsc::unbounded_channel();
     loop {
@@ -171,14 +208,21 @@ async fn run(key: Keypair, listen: Multiaddr, jobs: SyncSender<Job>) -> Result<(
                 SwarmEvent::NewListenAddr { address, .. } => {
                     eprintln!("p2p: listening on {address}, peer {}", swarm.local_peer_id());
                 }
+                SwarmEvent::ConnectionEstablished { .. } => {
+                    metrics.connections.inc();
+                }
+                SwarmEvent::ConnectionClosed { .. } => {
+                    metrics.connections.dec();
+                }
                 SwarmEvent::Behaviour(BehaviourEvent::Relay(request_response::Event::Message {
                     message: request_response::Message::Request { request, channel, .. },
                     ..
                 })) => {
                     let jobs = jobs.clone();
+                    let metrics = metrics.clone();
                     let replies = replies.clone();
                     tokio::task::spawn_blocking(move || {
-                        let reply = answer(&request, &jobs);
+                        let reply = answer(&request, &jobs, &metrics);
                         let _gone = replies.send((channel, reply));
                     });
                 }
@@ -197,11 +241,11 @@ async fn run(key: Keypair, listen: Multiaddr, jobs: SyncSender<Job>) -> Result<(
     }
 }
 
-fn swarm(key: Keypair) -> Result<Swarm<Behaviour>, String> {
+fn swarm(key: Keypair, support: ProtocolSupport) -> Result<Swarm<Behaviour>, String> {
     let identify = identify::Config::new(PROTOCOL.into(), key.public())
         .with_agent_version(format!("account-relay/{}", env!("CARGO_PKG_VERSION")));
     let relay = request_response::Behaviour::new(
-        [(StreamProtocol::new(PROTOCOL), ProtocolSupport::Inbound)],
+        [(StreamProtocol::new(PROTOCOL), support)],
         request_response::Config::default().with_request_timeout(REQUEST_TIMEOUT),
     );
     Ok(libp2p::SwarmBuilder::with_existing_identity(key)
@@ -223,11 +267,50 @@ fn swarm(key: Keypair) -> Result<Swarm<Behaviour>, String> {
 }
 
 /// The relay's answer to `request`, a submission.
-fn answer(request: &[u8], jobs: &SyncSender<Job>) -> RelayReply {
+fn answer(request: &[u8], jobs: &SyncSender<Submission>, metrics: &Metrics) -> RelayReply {
     match RelayRequest::from_bytes(request) {
-        Ok(request) => ask(jobs, request, "p2p").unwrap_or_else(refusal),
-        Err(error) => refusal(error.to_string()),
+        Ok(request) => ask(jobs, metrics, request, "p2p"),
+        Err(error) => {
+            metrics.refused("p2p", Reason::Invalid);
+            Refusal::new(Reason::Invalid, error.to_string()).reply()
+        }
     }
+}
+
+/// Sends `request` to the relay `peer` at `addr`, as `libp2p_module` does, and returns its
+/// answer. For tools and tests; the Accounts app goes through `libp2p_module` itself.
+pub fn submit(peer: PeerId, addr: Multiaddr, request: &RelayRequest) -> Result<RelayReply, String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?
+        .block_on(async {
+            let key = Keypair::from(secp256k1::Keypair::generate());
+            let mut swarm = swarm(key, ProtocolSupport::Outbound)?;
+            swarm.behaviour_mut().relay.send_request_with_addresses(
+                &peer,
+                request.to_bytes(),
+                vec![addr],
+            );
+            loop {
+                match swarm.select_next_some().await {
+                    SwarmEvent::Behaviour(BehaviourEvent::Relay(
+                        request_response::Event::Message {
+                            message: request_response::Message::Response { response, .. },
+                            ..
+                        },
+                    )) => {
+                        return serde_json::from_slice(&response).map_err(|error| {
+                            format!("the relay answered something else: {error}")
+                        });
+                    }
+                    SwarmEvent::Behaviour(BehaviourEvent::Relay(
+                        request_response::Event::OutboundFailure { error, .. },
+                    )) => return Err(error.to_string()),
+                    _ => {}
+                }
+            }
+        })
 }
 
 #[cfg(test)]

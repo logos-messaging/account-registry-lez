@@ -94,18 +94,17 @@ dependencies = [
  "account-log",
  "account-registry-client",
  "async-trait",
- "base64 0.22.1",
  "clap",
  "futures",
  "hex",
  "libp2p",
  "libp2p-mplex",
+ "prometheus-client 0.26.0",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tiny_http",
  "tokio",
- "ureq",
  "url",
 ]
 
@@ -3571,7 +3570,7 @@ dependencies = [
  "libp2p-ping",
  "libp2p-swarm",
  "pin-project",
- "prometheus-client",
+ "prometheus-client 0.23.1",
  "web-time",
 ]
 
@@ -5628,7 +5627,19 @@ dependencies = [
  "dtoa",
  "itoa",
  "parking_lot",
- "prometheus-client-derive-encode",
+ "prometheus-client-derive-encode 0.4.2",
+]
+
+[[package]]
+name = "prometheus-client"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f021d42d29841d029b61b45a25a7ef94feaf1d744913e59665103333a56045b8"
+dependencies = [
+ "dtoa",
+ "itoa",
+ "parking_lot",
+ "prometheus-client-derive-encode 0.5.1",
 ]
 
 [[package]]
@@ -5640,6 +5651,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "prometheus-client-derive-encode"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01e34894696ff94f64a20c2c373a6440903e9c2789a303d68ec6e6f953f890e4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
 ]
 
 [[package]]

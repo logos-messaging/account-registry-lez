@@ -47,6 +47,7 @@ serde = "1.0"
 serde_json = "1.0"
 thiserror = "2.0"
 tiny_http = "0.12"
+prometheus-client = "0.26"
 # The relay's libp2p listener: TCP, Noise and mplex, as Logos Core's libp2p_module speaks.
 libp2p = { version = "0.56", default-features = false, features = ["tcp", "noise", "request-response", "identify", "ping", "macros", "tokio", "ed25519", "secp256k1"] }
 libp2p-mplex = "0.43.1"

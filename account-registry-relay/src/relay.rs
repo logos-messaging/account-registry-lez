@@ -8,7 +8,10 @@
 
 use std::{
     collections::VecDeque,
-    sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError},
+    sync::{
+        Arc,
+        mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError},
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -19,71 +22,130 @@ use account_registry_client::{
     relay::{RelayReply, RelayRequest},
 };
 
-use crate::{auth::Auth, ledger::Ledger};
+use crate::{auth::Auth, ledger::Ledger, metrics::Metrics};
 
 /// What the relay is willing to pay for.
 #[derive(Debug, Clone)]
 pub struct Policy {
-    /// Sponsored writes per account in any 24 hours, appends included.
-    pub max_per_account_per_day: usize,
-    /// Sponsor only accounts with nothing published yet.
-    pub new_accounts_only: bool,
+    /// Sponsored appends per existing account in any 24 hours. A new account's first log is not
+    /// counted; 0 sponsors new accounts only.
+    pub max_appends_per_day: usize,
     /// The largest log payload sponsored, in bytes.
     pub max_log_bytes: usize,
+    /// Sponsored writes in any hour, across all accounts.
     pub max_per_hour: usize,
+    /// Sponsored writes in any 24 hours, across all accounts.
     pub max_per_day: usize,
     /// Below this payer balance, refuse everything: a write must be able to reserve its fee.
     pub min_balance: u128,
 }
 
-/// Work for the relay's worker.
-pub enum Job {
-    Submit(Submission),
-    /// Answer with the relay's state.
-    Status(Sender<serde_json::Value>),
-}
-
-/// A submission, and where to answer it if the sender waits.
+/// A submission, and where to answer it.
 pub struct Submission {
     pub request: RelayRequest,
-    pub reply: Option<Sender<RelayReply>>,
-    /// Where it came from, for the log.
+    pub reply: Sender<RelayReply>,
+    /// The transport it came over, for logs and metrics.
     pub source: &'static str,
 }
 
-/// How many jobs may wait for the worker; past that, submissions are refused as busy.
+/// Why a submission was refused, as reported in metrics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reason {
+    Credentials,
+    CredentialsUsed,
+    Invalid,
+    InProgress,
+    TooLarge,
+    AccountLimit,
+    RelayLimit,
+    AlreadyPublished,
+    Rejected,
+    Unavailable,
+    OutOfFunds,
+    Busy,
+    Stopping,
+}
+
+impl Reason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Credentials => "credentials",
+            Self::CredentialsUsed => "credentials_used",
+            Self::Invalid => "invalid",
+            Self::InProgress => "in_progress",
+            Self::TooLarge => "too_large",
+            Self::AccountLimit => "account_limit",
+            Self::RelayLimit => "relay_limit",
+            Self::AlreadyPublished => "already_published",
+            Self::Rejected => "rejected",
+            Self::Unavailable => "unavailable",
+            Self::OutOfFunds => "out_of_funds",
+            Self::Busy => "busy",
+            Self::Stopping => "stopping",
+        }
+    }
+}
+
+/// A refused submission: why, and what to tell the client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refusal {
+    pub reason: Reason,
+    pub message: String,
+}
+
+impl Refusal {
+    #[must_use]
+    pub fn new(reason: Reason, message: impl Into<String>) -> Self {
+        Self {
+            reason,
+            message: message.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn reply(&self) -> RelayReply {
+        RelayReply {
+            accepted: false,
+            reason: Some(self.message.clone()),
+        }
+    }
+}
+
+/// How many submissions may wait for the worker; past that, they are refused as busy.
 pub const QUEUE: usize = 64;
 
 /// How often to look for the write in flight on chain.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// How often to refresh the payer's balance while idle.
+const BALANCE_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Hands `request` to the worker and waits for its verdict. `Err` if the relay is busy or
-/// stopping and never saw it.
+/// Hands `request`, received over `source`, to the worker and returns its verdict, or a refusal
+/// if the relay is busy or stopping and never saw it.
 pub fn ask(
-    jobs: &SyncSender<Job>,
+    jobs: &SyncSender<Submission>,
+    metrics: &Metrics,
     request: RelayRequest,
     source: &'static str,
-) -> Result<RelayReply, String> {
+) -> RelayReply {
     let (reply, answer) = mpsc::channel();
     let submission = Submission {
         request,
-        reply: Some(reply),
+        reply,
         source,
     };
-    match jobs.try_send(Job::Submit(submission)) {
-        Ok(()) => answer.recv().map_err(|_| "the relay is stopping".into()),
-        Err(TrySendError::Full(_)) => Err("the relay is busy; try later".into()),
-        Err(TrySendError::Disconnected(_)) => Err("the relay is stopping".into()),
-    }
-}
-
-/// A reply refusing a submission for `reason`.
-#[must_use]
-pub const fn refusal(reason: String) -> RelayReply {
-    RelayReply {
-        accepted: false,
-        reason: Some(reason),
-    }
+    let refusal = match jobs.try_send(submission) {
+        Ok(()) => match answer.recv() {
+            Ok(reply) => return reply,
+            Err(_) => Refusal::new(Reason::Stopping, "the relay is stopping"),
+        },
+        Err(TrySendError::Full(_)) => Refusal::new(Reason::Busy, "the relay is busy; try later"),
+        Err(TrySendError::Disconnected(_)) => {
+            Refusal::new(Reason::Stopping, "the relay is stopping")
+        }
+    };
+    metrics.refused(source, refusal.reason);
+    refusal.reply()
 }
 
 /// A submission that passed every check.
@@ -91,12 +153,15 @@ struct Approved {
     addr: AccountAddr,
     log: SignedAccountLog,
     nullifier: Option<String>,
+    /// Whether the account already has a log on chain.
+    append: bool,
     source: &'static str,
 }
 
 /// The write sent and not yet landed.
 struct InFlight {
     addr: AccountAddr,
+    append: bool,
     source: &'static str,
     prepared: PreparedAppend,
     /// The payer's balance before sending.
@@ -110,6 +175,7 @@ pub struct Relay {
     auth: Auth,
     policy: Policy,
     ledger: Ledger,
+    metrics: Arc<Metrics>,
     approved: VecDeque<Approved>,
     in_flight: Option<InFlight>,
     next_poll: Instant,
@@ -123,29 +189,35 @@ impl Relay {
         auth: Auth,
         policy: Policy,
         ledger: Ledger,
+        metrics: Arc<Metrics>,
     ) -> Self {
-        Self {
+        let relay = Self {
             registry,
             payer,
             auth,
             policy,
             ledger,
+            metrics,
             approved: VecDeque::new(),
             in_flight: None,
             next_poll: Instant::now(),
-        }
+        };
+        relay.refresh();
+        relay
     }
 
-    /// Handles jobs until every sender is gone and every approved write is settled.
-    pub fn run(&mut self, jobs: &Receiver<Job>) {
+    /// Handles submissions until every sender is gone and every approved write is settled.
+    pub fn run(&mut self, jobs: &Receiver<Submission>) {
         let mut open = true;
         while open || self.busy() {
-            let job = if !open {
-                thread::sleep(POLL_INTERVAL);
-                None
-            } else if self.busy() {
-                match jobs.recv_timeout(POLL_INTERVAL) {
-                    Ok(job) => Some(job),
+            let wait = if self.busy() {
+                POLL_INTERVAL
+            } else {
+                BALANCE_INTERVAL
+            };
+            let submission = if open {
+                match jobs.recv_timeout(wait) {
+                    Ok(submission) => Some(submission),
                     Err(RecvTimeoutError::Timeout) => None,
                     Err(RecvTimeoutError::Disconnected) => {
                         open = false;
@@ -153,19 +225,12 @@ impl Relay {
                     }
                 }
             } else {
-                jobs.recv().map_or_else(
-                    |_| {
-                        open = false;
-                        None
-                    },
-                    Some,
-                )
+                thread::sleep(POLL_INTERVAL);
+                None
             };
-            match job {
-                Some(Job::Submit(submission)) => self.handle(submission),
-                Some(Job::Status(reply)) => {
-                    let _gone = reply.send(self.status());
-                }
+            match submission {
+                Some(submission) => self.handle(submission),
+                None if !self.busy() => self.refresh(),
                 None => {}
             }
             self.advance();
@@ -174,6 +239,25 @@ impl Relay {
 
     fn busy(&self) -> bool {
         self.in_flight.is_some() || !self.approved.is_empty()
+    }
+
+    /// Brings the balance and recent-write gauges up to date.
+    fn refresh(&self) {
+        if let Ok(balance) = self.registry.balance(self.payer) {
+            self.metrics.set_balance(balance);
+        }
+        self.count();
+    }
+
+    /// Brings the gauges that need no sequencer up to date.
+    fn count(&self) {
+        let (hour, day) = self.ledger.recent(now());
+        self.metrics.last_hour.set(gauge(hour));
+        self.metrics.last_day.set(gauge(day));
+        self.metrics.queued.set(gauge(self.approved.len()));
+        self.metrics
+            .in_flight
+            .set(i64::from(self.in_flight.is_some()));
     }
 
     /// Settles the write in flight once it lands or fails, then sends the next approved one.
@@ -195,56 +279,64 @@ impl Relay {
             };
             let flight = self.in_flight.take().expect("a write is in flight");
             let cost = self.settle(flight.before);
+            let (addr, source) = (&flight.addr, flight.source);
             match failure {
-                None => eprintln!(
-                    "published {} (from {}), cost {cost}",
-                    flight.addr, flight.source
-                ),
+                None => {
+                    let seconds = flight.sent.elapsed().as_secs_f64();
+                    self.metrics.written(flight.append, Some(seconds), cost);
+                    eprintln!("published {addr} (from {source}), cost {cost}");
+                }
                 Some(error) => {
-                    eprintln!("failed {} (from {}): {error}", flight.addr, flight.source)
+                    self.metrics.written(flight.append, None, cost);
+                    eprintln!("failed {addr} (from {source}): {error}");
                 }
             }
         }
         while self.in_flight.is_none()
             && let Some(approved) = self.approved.pop_front()
         {
-            let (addr, source) = (approved.addr.clone(), approved.source);
+            let (addr, source, append) = (approved.addr.clone(), approved.source, approved.append);
             match self.send(approved) {
                 Ok(flight) => {
                     self.next_poll = Instant::now() + POLL_INTERVAL;
                     self.in_flight = Some(flight);
                 }
-                Err(error) => eprintln!("failed {addr} (from {source}): {error}"),
+                Err(error) => {
+                    self.metrics.written(append, None, 0);
+                    eprintln!("failed {addr} (from {source}): {error}");
+                }
             }
         }
+        self.count();
     }
 
     fn handle(&mut self, submission: Submission) {
         let addr = submission.request.addr.clone();
-        let checked = self.check(&submission.request, submission.source);
-        if let Some(reply) = submission.reply {
-            let answer = match &checked {
-                Ok(_) => RelayReply {
+        let source = submission.source;
+        match self.check(&submission.request, source) {
+            Ok(approved) => {
+                let _gone = submission.reply.send(RelayReply {
                     accepted: true,
                     reason: None,
-                },
-                Err(reason) => RelayReply {
-                    accepted: false,
-                    reason: Some(reason.clone()),
-                },
-            };
-            let _gone = reply.send(answer);
-        }
-        match checked {
-            Ok(approved) => self.approved.push_back(approved),
-            Err(reason) => eprintln!("refused {addr} (from {}): {reason}", submission.source),
+                });
+                self.metrics.accepted(source);
+                self.approved.push_back(approved);
+            }
+            Err(refusal) => {
+                let _gone = submission.reply.send(refusal.reply());
+                self.metrics.refused(source, refusal.reason);
+                eprintln!("refused {addr} (from {source}): {}", refusal.message);
+            }
         }
     }
 
     /// Checks `request` against everything that would make the write fail or the relay
-    /// unwilling, without spending anything.
-    fn check(&self, request: &RelayRequest, source: &'static str) -> Result<Approved, String> {
-        let nullifier = self.auth.verify(request)?;
+    /// unwilling, without spending anything. The checks that need no sequencer come first.
+    fn check(&self, request: &RelayRequest, source: &'static str) -> Result<Approved, Refusal> {
+        let nullifier = self
+            .auth
+            .verify(request)
+            .map_err(|message| Refusal::new(Reason::Credentials, message))?;
         if let Some(used) = nullifier.as_deref()
             && (self.ledger.used(used)
                 || self
@@ -252,66 +344,92 @@ impl Relay {
                     .iter()
                     .any(|approved| approved.nullifier.as_deref() == Some(used)))
         {
-            return Err("these credentials were already used".into());
+            return Err(Refusal::new(
+                Reason::CredentialsUsed,
+                "these credentials were already used",
+            ));
         }
 
-        let (addr, log) = request.decode().map_err(|error| error.to_string())?;
+        let (addr, log) = request
+            .decode()
+            .map_err(|error| Refusal::new(Reason::Invalid, error.to_string()))?;
         if self
             .in_flight
             .as_ref()
             .is_some_and(|flight| flight.addr == addr)
             || self.approved.iter().any(|approved| approved.addr == addr)
         {
-            return Err("a write for this account is on its way; wait for it".into());
+            return Err(Refusal::new(
+                Reason::InProgress,
+                "a write for this account is on its way; wait for it",
+            ));
         }
         if log.payload.as_bytes().len() > self.policy.max_log_bytes {
-            return Err(format!(
-                "the relay sponsors logs up to {} bytes",
-                self.policy.max_log_bytes
+            return Err(Refusal::new(
+                Reason::TooLarge,
+                format!(
+                    "the relay sponsors logs up to {} bytes",
+                    self.policy.max_log_bytes
+                ),
             ));
         }
-        if self.ledger.writes_today(&addr.to_string(), now()) >= self.policy.max_per_account_per_day
-        {
-            return Err(format!(
-                "the relay sponsors {} updates a day per account; try later, or pay yourself",
-                self.policy.max_per_account_per_day
-            ));
+        let appends = self.ledger.appends_today(&addr.to_string(), now());
+        if appends > 0 && appends >= self.policy.max_appends_per_day {
+            return Err(self.account_limit());
         }
         let (hour, day) = self.ledger.recent(now());
         let waiting = self.approved.len();
-        let (hour, day) = (hour + waiting, day + waiting);
-        if hour >= self.policy.max_per_hour || day >= self.policy.max_per_day {
-            return Err("the relay is at its limit; try later, or pay yourself".into());
+        if hour + waiting >= self.policy.max_per_hour || day + waiting >= self.policy.max_per_day {
+            return Err(Refusal::new(
+                Reason::RelayLimit,
+                "the relay is at its limit; try later, or pay yourself",
+            ));
         }
 
-        let stored = self
-            .registry
-            .fetch(&addr)
-            .map_err(|error| error.to_string())?;
+        let stored = self.registry.fetch(&addr).map_err(unavailable)?;
         if stored.as_ref() == Some(&log) {
-            return Err("already published".into());
+            return Err(Refusal::new(Reason::AlreadyPublished, "already published"));
         }
-        if stored.is_some() && self.policy.new_accounts_only {
-            return Err("the relay sponsors new accounts only".into());
+        let append = stored.is_some();
+        if append && appends >= self.policy.max_appends_per_day {
+            return Err(self.account_limit());
         }
         self.registry
             .prepare_append(&addr, &log)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| match error {
+                LezAccountRegError::Transport(_)
+                | LezAccountRegError::Rpc { .. }
+                | LezAccountRegError::Response(_) => unavailable(error),
+                error => Refusal::new(Reason::Rejected, error.to_string()),
+            })?;
 
-        let balance = self
-            .registry
-            .balance(self.payer)
-            .map_err(|error| error.to_string())?;
+        let balance = self.registry.balance(self.payer).map_err(unavailable)?;
+        self.metrics.set_balance(balance);
         if balance < self.policy.min_balance {
-            return Err("the relay is out of funds; pay yourself".into());
+            return Err(Refusal::new(
+                Reason::OutOfFunds,
+                "the relay is out of funds; pay yourself",
+            ));
         }
 
         Ok(Approved {
             addr,
             log,
             nullifier,
+            append,
             source,
         })
+    }
+
+    fn account_limit(&self) -> Refusal {
+        let message = match self.policy.max_appends_per_day {
+            0 => "the relay sponsors new accounts only; pay yourself".to_owned(),
+            max => format!(
+                "the relay sponsors {max} updates a day to an existing account; try later, or pay \
+                 yourself"
+            ),
+        };
+        Refusal::new(Reason::AccountLimit, message)
     }
 
     /// Sends `approved`, recording it first: a write that is sent pays even if it then fails.
@@ -320,9 +438,10 @@ impl Relay {
         let prepared = self
             .registry
             .prepare_append(&approved.addr, &approved.log)?;
+        let key = approved.addr.to_string();
         self.ledger
             .record(
-                &approved.addr.to_string(),
+                approved.append.then_some(key.as_str()),
                 approved.nullifier.as_deref(),
                 now(),
             )
@@ -333,6 +452,7 @@ impl Relay {
         }
         Ok(InFlight {
             addr: approved.addr,
+            append: approved.append,
             source: approved.source,
             prepared,
             before,
@@ -343,6 +463,7 @@ impl Relay {
     /// Adds what the payer spent since its balance was `before` to the ledger, and returns it.
     fn settle(&mut self, before: u128) -> u128 {
         let after = self.registry.balance(self.payer).unwrap_or(before);
+        self.metrics.set_balance(after);
         let cost = before.saturating_sub(after);
         if let Err(error) = self.ledger.spend(cost) {
             eprintln!("ledger: {error}");
@@ -360,28 +481,17 @@ impl Relay {
         let cost = self.settle(flight.before);
         landed.map(|()| cost)
     }
+}
 
-    /// The relay's state, for `GET /v1/status`.
-    #[must_use]
-    pub fn status(&self) -> serde_json::Value {
-        let (hour, day) = self.ledger.recent(now());
-        serde_json::json!({
-            "program": self.registry.program().to_string(),
-            "payer": self.payer.to_string(),
-            "balance": self.registry.balance(self.payer).ok().map(|b| b.to_string()),
-            "auth": self.auth.kinds(),
-            "sponsoredLastHour": hour,
-            "sponsoredLastDay": day,
-            "spent": self.ledger.spent().to_string(),
-            "limits": {
-                "maxPerAccountPerDay": self.policy.max_per_account_per_day,
-                "newAccountsOnly": self.policy.new_accounts_only,
-                "maxLogBytes": self.policy.max_log_bytes,
-                "maxPerHour": self.policy.max_per_hour,
-                "maxPerDay": self.policy.max_per_day,
-            },
-        })
-    }
+fn unavailable(error: LezAccountRegError) -> Refusal {
+    Refusal::new(
+        Reason::Unavailable,
+        format!("the relay cannot reach the chain: {error}"),
+    )
+}
+
+fn gauge(count: usize) -> i64 {
+    i64::try_from(count).unwrap_or(i64::MAX)
 }
 
 fn now() -> u64 {
@@ -411,8 +521,7 @@ mod tests {
 
     fn policy() -> Policy {
         Policy {
-            max_per_account_per_day: 2,
-            new_accounts_only: false,
+            max_appends_per_day: 2,
             max_log_bytes: 4096,
             max_per_hour: 2,
             max_per_day: 10,
@@ -429,7 +538,15 @@ mod tests {
         let payer: PrivateKey = LOCAL_PAYER_KEY.parse().unwrap();
         let payer_id = account_registry_client::signer_id(&payer);
         let registry = Registry::connect(&url, program).unwrap().with_payer(payer);
-        Relay::new(registry, payer_id, auth, policy, Ledger::in_memory())
+        let metrics = Arc::new(Metrics::new(Vec::new()));
+        Relay::new(
+            registry,
+            payer_id,
+            auth,
+            policy,
+            Ledger::in_memory(),
+            metrics,
+        )
     }
 
     fn new_account(name: &str, auth: RelayAuth) -> RelayRequest {
@@ -444,8 +561,17 @@ mod tests {
     }
 
     fn sponsor(relay: &mut Relay, request: &RelayRequest) -> Result<u128, String> {
-        let approved = relay.check(request, "test")?;
+        let approved = relay
+            .check(request, "test")
+            .map_err(|refusal| refusal.message)?;
         relay.publish(approved).map_err(|error| error.to_string())
+    }
+
+    fn refusal(relay: &Relay, request: &RelayRequest) -> Refusal {
+        relay
+            .check(request, "test")
+            .err()
+            .expect("the relay refuses")
     }
 
     #[test]
@@ -455,28 +581,19 @@ mod tests {
 
         let first = new_account("Saro", RelayAuth::default());
         assert!(sponsor(&mut relay, &first).unwrap() > 0);
-        assert_eq!(
-            relay.check(&first, "test").err().unwrap(),
-            "already published"
-        );
+        assert_eq!(refusal(&relay, &first).reason, Reason::AlreadyPublished);
 
         let second = new_account("Ana", RelayAuth::default());
         assert!(sponsor(&mut relay, &second).is_ok());
         let third = new_account("Ben", RelayAuth::default());
-        assert!(
-            relay
-                .check(&third, "test")
-                .err()
-                .unwrap()
-                .contains("at its limit")
-        );
+        assert_eq!(refusal(&relay, &third).reason, Reason::RelayLimit);
 
         let mut forged = new_account("Eve", RelayAuth::default());
         forged.addr = new_account("Joe", RelayAuth::default()).addr;
-        assert!(relay.check(&forged, "test").is_err());
+        assert_eq!(refusal(&relay, &forged).reason, Reason::Invalid);
     }
 
-    /// The log `key` signs after appending `names` to `draft`.
+    /// The log `key` signs after appending `name` to `draft`.
     fn grow(key: &Ed25519SigningKey, draft: &mut AccountLogDraft, name: &str) -> RelayRequest {
         let data = EntryData::Text(name.into());
         draft
@@ -503,26 +620,26 @@ mod tests {
 
         assert!(sponsor(&mut relay, &grow(&key, &mut draft, "Saro")).is_ok());
         assert!(sponsor(&mut relay, &grow(&key, &mut draft, "Saro M.")).is_ok());
+        assert!(sponsor(&mut relay, &grow(&key, &mut draft, "Saro Ma.")).is_ok());
         let third = grow(&key, &mut draft, "Saro Marr");
-        assert!(
-            relay
-                .check(&third, "test")
-                .err()
-                .unwrap()
-                .contains("2 updates a day")
-        );
+        let limited = refusal(&relay, &third);
+        assert_eq!(limited.reason, Reason::AccountLimit);
+        assert!(limited.message.contains("2 updates a day"));
 
         let fresh = Policy {
-            new_accounts_only: true,
+            max_appends_per_day: 0,
             ..policy()
         };
         let relay = self::relay(Auth::new(vec![Box::new(Open)]), fresh);
         assert!(
-            relay
-                .check(&third, "test")
-                .err()
-                .unwrap()
+            refusal(&relay, &third)
+                .message
                 .contains("new accounts only")
+        );
+        assert!(
+            relay
+                .check(&new_account("Ana", RelayAuth::default()), "test")
+                .is_ok()
         );
     }
 
@@ -533,39 +650,32 @@ mod tests {
             min_balance: u128::MAX,
             ..policy()
         };
-        let relay_broke = relay(Auth::new(vec![Box::new(Open)]), broke);
         let request = new_account("Saro", RelayAuth::default());
-        assert!(
-            relay_broke
-                .check(&request, "test")
-                .err()
-                .unwrap()
-                .contains("out of funds")
-        );
+        let relay_broke = relay(Auth::new(vec![Box::new(Open)]), broke);
+        assert_eq!(refusal(&relay_broke, &request).reason, Reason::OutOfFunds);
 
         let tight = Policy {
             max_log_bytes: 8,
             ..policy()
         };
         let relay_tight = relay(Auth::new(vec![Box::new(Open)]), tight);
-        assert!(
-            relay_tight
-                .check(&request, "test")
-                .err()
-                .unwrap()
-                .contains("up to 8 bytes")
-        );
+        let too_large = refusal(&relay_tight, &request);
+        assert_eq!(too_large.reason, Reason::TooLarge);
+        assert!(too_large.message.contains("up to 8 bytes"));
 
         let gated = relay(
             Auth::new(vec![Box::new(SharedToken("s3cret".into()))]),
             policy(),
         );
-        assert!(gated.check(&request, "test").is_err());
+        assert_eq!(refusal(&gated, &request).reason, Reason::Credentials);
         let wrong = RelayAuth {
             kind: "token".into(),
             payload: "guess".into(),
         };
-        assert!(gated.check(&new_account("Ana", wrong), "test").is_err());
+        assert_eq!(
+            refusal(&gated, &new_account("Ana", wrong)).reason,
+            Reason::Credentials
+        );
         let right = RelayAuth {
             kind: "token".into(),
             payload: "s3cret".into(),

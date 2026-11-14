@@ -13,8 +13,8 @@ const DAY: u64 = 24 * HOUR;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct State {
-    /// When each sponsored write per account address was sent, for the past day.
-    writes: BTreeMap<String, Vec<u64>>,
+    /// When each sponsored append per account address was sent, for the past day.
+    appends: BTreeMap<String, Vec<u64>>,
     /// When each sponsored write was sent, in seconds since the epoch, for the past day.
     sent: Vec<u64>,
     /// Credentials already used.
@@ -55,11 +55,11 @@ impl Ledger {
         }
     }
 
-    /// Sponsored writes for `addr` sent in the day before `now`.
+    /// Sponsored appends to `addr` sent in the day before `now`.
     #[must_use]
-    pub fn writes_today(&self, addr: &str, now: u64) -> usize {
+    pub fn appends_today(&self, addr: &str, now: u64) -> usize {
         self.state
-            .writes
+            .appends
             .get(addr)
             .map_or(0, |sent| sent.iter().filter(|&&at| at + DAY > now).count())
     }
@@ -88,14 +88,24 @@ impl Ledger {
     }
 
     /// Records a sponsored write sent at `now`, before it lands: a write that is sent pays even
-    /// if it then fails.
-    pub fn record(&mut self, addr: &str, nullifier: Option<&str>, now: u64) -> io::Result<()> {
-        let sent = self.state.writes.entry(addr.to_owned()).or_default();
-        sent.retain(|&at| at + DAY > now);
-        sent.push(now);
-        self.state
-            .writes
-            .retain(|_, sent| sent.iter().any(|&at| at + DAY > now));
+    /// if it then fails. `append` is the address of an existing account it appends to.
+    pub fn record(
+        &mut self,
+        append: Option<&str>,
+        nullifier: Option<&str>,
+        now: u64,
+    ) -> io::Result<()> {
+        if let Some(addr) = append {
+            self.state
+                .appends
+                .entry(addr.to_owned())
+                .or_default()
+                .push(now);
+        }
+        self.state.appends.retain(|_, sent| {
+            sent.retain(|&at| at + DAY > now);
+            !sent.is_empty()
+        });
         if let Some(nullifier) = nullifier {
             self.state.nullifiers.insert(nullifier.to_owned());
         }
@@ -128,11 +138,11 @@ mod tests {
     fn counts_survive_a_restart() {
         let dir = std::env::temp_dir().join(format!("relay-ledger-{}", std::process::id()));
         let mut ledger = Ledger::open(&dir).unwrap();
-        ledger.record("aa", Some("token:x"), 1_000).unwrap();
+        ledger.record(Some("aa"), Some("token:x"), 1_000).unwrap();
         ledger.spend(26).unwrap();
 
         let ledger = Ledger::open(&dir).unwrap();
-        assert_eq!(ledger.writes_today("aa", 1_000), 1);
+        assert_eq!(ledger.appends_today("aa", 1_000), 1);
         assert!(ledger.used("token:x"));
         assert_eq!(ledger.spent(), 26);
         fs::remove_dir_all(dir).unwrap();
@@ -141,12 +151,13 @@ mod tests {
     #[test]
     fn recent_writes_age_out() {
         let mut ledger = Ledger::in_memory();
-        ledger.record("aa", None, 0).unwrap();
-        ledger.record("bb", None, 2 * HOUR).unwrap();
-        ledger.record("bb", None, 3 * HOUR).unwrap();
-        assert_eq!(ledger.recent(3 * HOUR), (1, 3));
-        assert_eq!(ledger.recent(DAY + 1), (0, 2));
-        assert_eq!(ledger.writes_today("bb", 3 * HOUR), 2);
-        assert_eq!(ledger.writes_today("aa", DAY + 1), 0);
+        ledger.record(Some("aa"), None, 0).unwrap();
+        ledger.record(None, None, HOUR).unwrap();
+        ledger.record(Some("bb"), None, 2 * HOUR).unwrap();
+        ledger.record(Some("bb"), None, 3 * HOUR).unwrap();
+        assert_eq!(ledger.recent(3 * HOUR), (1, 4));
+        assert_eq!(ledger.recent(DAY + 1), (0, 3));
+        assert_eq!(ledger.appends_today("bb", 3 * HOUR), 2);
+        assert_eq!(ledger.appends_today("aa", DAY + 1), 0);
     }
 }

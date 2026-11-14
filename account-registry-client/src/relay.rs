@@ -7,10 +7,7 @@
 //! it does not appear.
 //!
 //! A submission reaches a relay over libp2p, on `/logos/accounts/relay/1.0.0` as one
-//! varint-framed message, over HTTP, as the body of `POST /v1/submit`, or over Logos Delivery, on
-//! [`RELAY_CONTENT_TOPIC`].
-
-use std::time::Duration;
+//! varint-framed message; `account-registry-relay` has the transport.
 
 use account_log::{AccountAddr, SignedAccountLog};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -18,14 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::LezAccountRegError;
 
-/// The Logos Delivery content topic relays listen on.
-pub const RELAY_CONTENT_TOPIC: &str = "/logos-accounts/1/relay-submit/json";
-
 /// The submission format's version.
 pub const RELAY_REQUEST_VERSION: u8 = 1;
-
-/// How long a relay's HTTP endpoint may take to accept or refuse a submission.
-const SUBMIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One submission: the log the client wants published under `addr`, and its credentials.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,7 +40,7 @@ pub struct RelayAuth {
     pub payload: String,
 }
 
-/// A relay's answer over HTTP. Accepting a submission is no promise to publish it: only the chain
+/// A relay's answer. Accepting a submission is no promise to publish it: only the chain
 /// says whether it was.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelayReply {
@@ -99,49 +90,6 @@ impl RelayRequest {
         log.verify(&addr).map_err(LezAccountRegError::Unverified)?;
         Ok((addr, log))
     }
-}
-
-/// Hands `request` to the relay at `url` over HTTP, and returns once it accepted or refused it.
-pub fn submit_http(url: &str, request: &RelayRequest) -> Result<RelayReply, LezAccountRegError> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(SUBMIT_TIMEOUT))
-        .http_status_as_error(false)
-        .build()
-        .into();
-    let endpoint = format!("{}/v1/submit", url.trim_end_matches('/'));
-    let mut response = agent
-        .post(&endpoint)
-        .header("content-type", "application/json")
-        .send(&request.to_bytes()[..])?;
-    let reply: RelayReply = response.body_mut().read_json()?;
-    Ok(reply)
-}
-
-/// Publishes `request` on [`RELAY_CONTENT_TOPIC`] through the `logosdeliverynode` whose REST
-/// endpoint is `rest`, and returns the node's request id. No relay answers: wait for the log on
-/// chain.
-pub fn submit_delivery(rest: &str, request: &RelayRequest) -> Result<String, LezAccountRegError> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(SUBMIT_TIMEOUT))
-        .build()
-        .into();
-    let body = serde_json::json!({
-        "payload": STANDARD.encode(request.to_bytes()),
-        "contentTopic": RELAY_CONTENT_TOPIC,
-        "ephemeral": false,
-    });
-    let reply: serde_json::Value = agent
-        .post(format!(
-            "{}/messaging/v1/messages",
-            rest.trim_end_matches('/')
-        ))
-        .send_json(&body)?
-        .body_mut()
-        .read_json()?;
-    reply["requestId"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| LezAccountRegError::Relay(format!("the node answered {reply}")))
 }
 
 #[cfg(test)]

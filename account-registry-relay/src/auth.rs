@@ -75,12 +75,6 @@ impl Auth {
         let nullifier = scheme.verify(request)?;
         Ok(nullifier.map(|nullifier| format!("{kind}:{nullifier}")))
     }
-
-    /// The kinds accepted, for the relay's status.
-    #[must_use]
-    pub fn kinds(&self) -> Vec<&'static str> {
-        self.0.iter().map(|scheme| scheme.kind()).collect()
-    }
 }
 
 #[cfg(test)]
