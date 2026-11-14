@@ -6,6 +6,7 @@ members = [
     "account-registry-lezprogram/methods",
     "account-registry-client",
     "account-registry-cli",
+    "account-registry-relay",
 ]
 # The guest is its own workspace, so its Cargo.lock alone decides what goes into the image.
 exclude = ["account-registry-lezprogram/methods/guest"]
@@ -45,6 +46,15 @@ risc0-zkvm = { version = "3.0.5", default-features = false, features = ["std"] }
 serde = "1.0"
 serde_json = "1.0"
 thiserror = "2.0"
+tiny_http = "0.12"
+prometheus-client = "0.26"
+# The relay's libp2p listener: TCP, Noise and mplex, as Logos Core's libp2p_module speaks.
+libp2p = { version = "0.56", default-features = false, features = ["tcp", "noise", "request-response", "identify", "ping", "macros", "tokio", "ed25519", "secp256k1"] }
+libp2p-mplex = "0.43.1"
+async-trait = "0.1"
+futures = "0.3"
+hex = "0.4"
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
 # Blocking HTTP for the client's JSON-RPC: no async runtime anywhere in the client.
 ureq = { version = "3.5.1", default-features = false, features = ["json", "rustls"] }
 url = "2.5.4"
