@@ -55,7 +55,7 @@ struct Args {
     max_appends_per_day: usize,
 
     /// The largest log payload sponsored, in bytes.
-    #[arg(long, default_value_t = 4096)]
+    #[arg(long, env = "ACCOUNT_RELAY_MAX_LOG_BYTES", default_value_t = 4096)]
     max_log_bytes: usize,
 
     /// Sponsored writes in any hour, across all accounts.
@@ -67,7 +67,7 @@ struct Args {
     max_per_day: usize,
 
     /// Refuse everything below this payer balance, in units.
-    #[arg(long, default_value_t = 70_000_000)]
+    #[arg(long, env = "ACCOUNT_RELAY_MIN_BALANCE", default_value_t = 70_000_000)]
     min_balance: u128,
 }
 

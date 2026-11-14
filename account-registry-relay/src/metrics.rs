@@ -167,10 +167,15 @@ impl Metrics {
         self.writes
             .get_or_create(&WriteLabels { kind, outcome })
             .inc();
-        self.fees.inc_by(u64::try_from(cost).unwrap_or(u64::MAX));
+        self.spent(cost);
         if let Some(seconds) = landed {
             self.landing.observe(seconds);
         }
+    }
+
+    /// Counts `cost` units spent on fees.
+    pub fn spent(&self, cost: u128) {
+        self.fees.inc_by(u64::try_from(cost).unwrap_or(u64::MAX));
     }
 
     pub fn set_balance(&self, units: u128) {

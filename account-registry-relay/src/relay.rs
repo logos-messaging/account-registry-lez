@@ -119,6 +119,8 @@ pub const QUEUE: usize = 64;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// How often to refresh the payer's balance while idle.
 const BALANCE_INTERVAL: Duration = Duration::from_secs(60);
+/// How long a transport waits for the worker's verdict; a submission still waiting is dropped.
+pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Hands `request`, received over `source`, to the worker and returns its verdict, or a refusal
 /// if the relay is busy or stopping and never saw it.
@@ -135,9 +137,14 @@ pub fn ask(
         source,
     };
     let refusal = match jobs.try_send(submission) {
-        Ok(()) => match answer.recv() {
+        Ok(()) => match answer.recv_timeout(ANSWER_TIMEOUT) {
             Ok(reply) => return reply,
-            Err(_) => Refusal::new(Reason::Stopping, "the relay is stopping"),
+            Err(RecvTimeoutError::Timeout) => {
+                Refusal::new(Reason::Busy, "the relay is busy; try later")
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                Refusal::new(Reason::Stopping, "the relay is stopping")
+            }
         },
         Err(TrySendError::Full(_)) => Refusal::new(Reason::Busy, "the relay is busy; try later"),
         Err(TrySendError::Disconnected(_)) => {
@@ -234,6 +241,7 @@ impl Relay {
                 None => {}
             }
             self.advance();
+            self.count();
         }
     }
 
@@ -307,7 +315,6 @@ impl Relay {
                 }
             }
         }
-        self.count();
     }
 
     fn handle(&mut self, submission: Submission) {
@@ -315,16 +322,21 @@ impl Relay {
         let source = submission.source;
         match self.check(&submission.request, source) {
             Ok(approved) => {
-                let _gone = submission.reply.send(RelayReply {
+                let accepted = RelayReply {
                     accepted: true,
                     reason: None,
-                });
+                };
+                if submission.reply.send(accepted).is_err() {
+                    eprintln!("dropped {addr} (from {source}): the requester stopped waiting");
+                    return;
+                }
                 self.metrics.accepted(source);
                 self.approved.push_back(approved);
             }
             Err(refusal) => {
-                let _gone = submission.reply.send(refusal.reply());
-                self.metrics.refused(source, refusal.reason);
+                if submission.reply.send(refusal.reply()).is_ok() {
+                    self.metrics.refused(source, refusal.reason);
+                }
                 eprintln!("refused {addr} (from {source}): {}", refusal.message);
             }
         }
@@ -447,7 +459,8 @@ impl Relay {
             )
             .map_err(|error| LezAccountRegError::Relay(error.to_string()))?;
         if let Err(error) = self.registry.send_append(&prepared) {
-            self.settle(before);
+            let cost = self.settle(before);
+            self.metrics.spent(cost);
             return Err(error);
         }
         Ok(InFlight {

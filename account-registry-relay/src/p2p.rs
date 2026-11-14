@@ -99,7 +99,7 @@ impl request_response::Codec for FramedJson {
 
 async fn read_frame<T: AsyncRead + Unpin>(io: &mut T) -> io::Result<Vec<u8>> {
     let mut length: usize = 0;
-    for shift in (0..).step_by(7).take(10) {
+    for shift in (0..).step_by(7).take(3) {
         let mut byte = [0u8];
         io.read_exact(&mut byte).await?;
         length |= usize::from(byte[0] & 0x7f) << shift;
