@@ -179,6 +179,13 @@ docker compose up -d
 docker compose logs relay | grep peer   # the peer id clients dial
 ```
 
+The same compose file runs Prometheus, scraping the relay every 15 s and keeping 30 days, and
+Grafana on `127.0.0.1:3000` (`GRAFANA_PORT`), logging in as `admin`/`admin` unless
+`GRAFANA_ADMIN_PASSWORD` is set. Grafana opens on the Account Relay dashboard: the payer's balance
+and runway, submissions and refusals by reason, writes, fees, landing time, the queue and libp2p
+connections. The dashboard is `monitoring/grafana/dashboards/account-relay.json`; it picks its data
+source and instance from variables, so it can be imported into another Grafana as well.
+
 ## Versions
 
 The version follows LEZ's: registry `0.3.x` is built for LEZ v0.3 and `0.4.x` for LEZ v0.4, and

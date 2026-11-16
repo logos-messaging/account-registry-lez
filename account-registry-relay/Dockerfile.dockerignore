@@ -6,3 +6,4 @@
 **/rocksdb-*
 .cargo/config.toml
 **/relay-state
+**/monitoring
