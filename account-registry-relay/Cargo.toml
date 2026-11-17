@@ -1,0 +1,30 @@
+[package]
+name = "account-registry-relay"
+description = "Publish other accounts' signed logs to the registry, paying the fee: onboarding before an account holds funds."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "account-relay"
+path = "src/main.rs"
+
+[dependencies]
+account-log.workspace = true
+account-registry-client.workspace = true
+clap.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tiny_http.workspace = true
+prometheus-client.workspace = true
+libp2p.workspace = true
+libp2p-mplex.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+tokio.workspace = true
+hex.workspace = true
+url.workspace = true

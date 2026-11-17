@@ -41,6 +41,7 @@ Clients take the registry by its program account, e.g. `ACCOUNT_REGISTRY_PROGRAM
 | `account-registry-guest` | `account-registry-lezprogram/methods/guest` | The zkVM entry point. Its own workspace, so its `Cargo.lock` alone decides what goes into the image |
 | `account-registry-client` | `account-registry-client` | Blocking JSON-RPC client (no async runtime) implementing libchat's `AccountProvider` and `AccountPublisher`. Does not link the guest |
 | `account-registry-cli` | `account-registry-cli` | The `account-registry` binary: `keygen`, `deploy`, `fetch`, `balance` |
+| `account-registry-relay` | `account-registry-relay` | The `account-relay` service: publishes other accounts' signed logs and pays the fee |
 
 ## Usage
 
@@ -135,6 +136,55 @@ source .env
 cargo run -p account-registry-client --example account_publish "$SEQUENCER_URL"
 account-registry fetch <account address, hex>
 ```
+
+## Account relay
+
+A new account holds no funds, and the registry charges a fee for every write. An account relay
+publishes the account's log for it and pays the fee. It can neither forge nor alter a log, since
+the log's own signature authorizes the write, so anyone can run one; a relay can only decline.
+
+A client signs its log and sends it to the relay over libp2p, on `/logos/accounts/relay/1.0.0`,
+as Logos Core's `libp2p_module` sends with `protocolRequest`, the way the RLN membership allocation
+service is reached. The relay answers once it has checked the submission; the client then waits
+for the log on chain, and pays the fee itself if it does not appear. `account_registry_client::relay`
+has the format; another way in implements the relay's `Transport` trait.
+
+The relay checks everything a failed write would pay for before sending: the signature, that the
+log extends the one on chain, the size limits, its own quotas and its balance. By default it
+sponsors every new account's first log, up to 2 updates a day to an existing account, logs up to
+4 KiB, at most 30 writes an hour and 200 a day overall, and refuses everything below 70M units.
+Credentials are pluggable; the open and shared-token schemes here are placeholders for a test
+network. With `--metrics`, it serves Prometheus metrics on `/metrics`: submissions and refusals by
+reason, writes, fees spent, the payer's balance, and how long writes take to land.
+
+```sh
+# a LEZ v0.4 sequencer, the registry deployed there, and the relay's funded payer
+export SEQUENCER_URL=<url> ACCOUNT_REGISTRY_PROGRAM=<program account> ACCOUNT_REGISTRY_PAYER=<key>
+cargo run -p account-registry-relay -- --p2p /ip4/0.0.0.0/tcp/9010 --metrics 127.0.0.1:9464
+# prints its libp2p peer id; the key is kept in relay-state/node_key.hex
+
+# a client with no funds
+cargo run -p account-registry-relay --example relay_publish -- <peer id> /ip4/127.0.0.1/tcp/9010
+```
+
+`account-registry-relay/compose.yaml` runs the relay against a LEZ v0.4 sequencer; the public
+testnet runs v0.3 until it moves to v0.4, so it has no default. libp2p is on port 9010 and
+metrics on `127.0.0.1:9464`. The image runs as an unprivileged user, keeps its ledger and libp2p
+key in a volume, and checks its own health on `/metrics`:
+
+```sh
+cd account-registry-relay
+cp .env.example .env   # set SEQUENCER_URL, ACCOUNT_REGISTRY_PROGRAM and ACCOUNT_REGISTRY_PAYER
+docker compose up -d
+docker compose logs relay | grep peer   # the peer id clients dial
+```
+
+The same compose file runs Prometheus, scraping the relay every 15 s and keeping 30 days, and
+Grafana on `127.0.0.1:3000` (`GRAFANA_PORT`), logging in as `admin`/`admin` unless
+`GRAFANA_ADMIN_PASSWORD` is set. Grafana opens on the Account Relay dashboard: the payer's balance
+and runway, submissions and refusals by reason, writes, fees, landing time, the queue and libp2p
+connections. The dashboard is `monitoring/grafana/dashboards/account-relay.json`; it picks its data
+source and instance from variables, so it can be imported into another Grafana as well.
 
 ## Versions
 

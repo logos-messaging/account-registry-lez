@@ -1,0 +1,62 @@
+# An account relay for a LEZ v0.4 network, with Prometheus and a Grafana dashboard. Copy .env.example
+# to .env, set the sequencer, the registry and ACCOUNT_REGISTRY_PAYER, then `docker compose up -d`.
+name: account-relay
+
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: account-registry-relay/Dockerfile
+    image: account-relay:local
+    environment:
+      SEQUENCER_URL: ${SEQUENCER_URL:?set SEQUENCER_URL to a LEZ v0.4 sequencer}
+      ACCOUNT_REGISTRY_PROGRAM: ${ACCOUNT_REGISTRY_PROGRAM:?set ACCOUNT_REGISTRY_PROGRAM to the registry deployed there}
+      ACCOUNT_REGISTRY_PAYER: ${ACCOUNT_REGISTRY_PAYER:-}
+      ACCOUNT_RELAY_AUTH: ${ACCOUNT_RELAY_AUTH:-open}
+      ACCOUNT_RELAY_TOKEN: ${ACCOUNT_RELAY_TOKEN:-}
+      ACCOUNT_RELAY_MAX_APPENDS_PER_DAY: ${ACCOUNT_RELAY_MAX_APPENDS_PER_DAY:-2}
+      ACCOUNT_RELAY_MAX_PER_HOUR: ${ACCOUNT_RELAY_MAX_PER_HOUR:-30}
+      ACCOUNT_RELAY_MAX_PER_DAY: ${ACCOUNT_RELAY_MAX_PER_DAY:-200}
+      ACCOUNT_RELAY_MAX_LOG_BYTES: ${ACCOUNT_RELAY_MAX_LOG_BYTES:-4096}
+      ACCOUNT_RELAY_MIN_BALANCE: ${ACCOUNT_RELAY_MIN_BALANCE:-70000000}
+    ports:
+      - "9010:9010"
+      - "127.0.0.1:9464:9464"
+    volumes:
+      - relay-state:/state
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - relay
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/account-relay.json
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  relay-state:
+  prometheus-data:
+  grafana-data:

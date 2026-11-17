@@ -35,6 +35,7 @@ pub use error::LezAccountRegError;
 pub use lee::{Account, AccountId, Actor, PrivateKey, PublicAccountEvidence, PublicKey};
 
 mod error;
+pub mod relay;
 mod rpc;
 
 /// How often to look for a submitted transaction's effect.
@@ -109,14 +110,20 @@ impl Registry {
         log: &SignedAccountLog,
     ) -> Result<(), LezAccountRegError> {
         let prepared = self.prepare_append(addr, log)?;
-        let _tx = self.send(
+        self.send_append(&prepared)?;
+        self.await_append(&prepared, PUBLISH_TIMEOUT)
+    }
+
+    /// Sends `prepared`, paid by the configured payer, and returns the transaction's hash once
+    /// the sequencer accepts it. [`Registry::await_append`] then waits for it to land.
+    pub fn send_append(&self, prepared: &PreparedAppend) -> Result<String, LezAccountRegError> {
+        self.send(
             prepared.actor(),
             &[],
             vec![prepared.evidence()],
             &prepared.instruction,
             prepared.gas_limit,
-        )?;
-        self.await_append(&prepared, PUBLISH_TIMEOUT)
+        )
     }
 
     /// The write that takes the log on chain to `log`, for a caller that submits it itself, e.g.
@@ -128,7 +135,18 @@ impl Registry {
         log: &SignedAccountLog,
     ) -> Result<PreparedAppend, LezAccountRegError> {
         let stored = self.fetch(addr)?;
-        PreparedAppend::new(self.program, addr, stored.as_ref(), log)
+        self.prepare_append_onto(addr, stored.as_ref(), log)
+    }
+
+    /// [`Registry::prepare_append`] onto `stored`, the log the caller just fetched for `addr`,
+    /// `None` if nothing is published, without fetching it again.
+    pub fn prepare_append_onto(
+        &self,
+        addr: &AccountAddr,
+        stored: Option<&SignedAccountLog>,
+        log: &SignedAccountLog,
+    ) -> Result<PreparedAppend, LezAccountRegError> {
+        PreparedAppend::new(self.program, addr, stored, log)
     }
 
     /// Waits up to `timeout` for the chain to hold the log `prepared` was made for, after the
@@ -267,7 +285,7 @@ impl PreparedAppend {
 
     /// Whether `stored`, the log now on chain, is the one this append writes. Fails with
     /// [`LezAccountRegError::Conflict`] if it is neither that nor the log the append started from.
-    fn landed(&self, stored: Option<&SignedAccountLog>) -> Result<bool, LezAccountRegError> {
+    pub fn landed(&self, stored: Option<&SignedAccountLog>) -> Result<bool, LezAccountRegError> {
         match stored {
             Some(stored) if stored == &self.log => Ok(true),
             Some(stored) if stored.payload.as_bytes() != self.base => {

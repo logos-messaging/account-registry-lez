@@ -91,6 +91,10 @@ jobs:
           curl -so /dev/null --retry-connrefused --retry 360 --retry-delay 10 http://127.0.0.1:3040 &
           wait -n
       - run: cargo test --locked -p account-registry-cli -- --ignored against_a_sequencer
+      - name: Relay against the sequencer
+        run: |
+          program=$(cargo run --locked -q -p account-registry-cli -- deploy | sed -n 's/^Registry deployed at //p')
+          ACCOUNT_REGISTRY_PROGRAM="$program" cargo test --locked -p account-registry-relay -- --ignored --test-threads=1
       - if: failure()
         run: tail -n 200 sequencer.log
 

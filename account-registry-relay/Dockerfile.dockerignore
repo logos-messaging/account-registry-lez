@@ -1,0 +1,9 @@
+**/target
+.git
+.claude
+.env
+.env.*
+**/rocksdb-*
+.cargo/config.toml
+**/relay-state
+**/monitoring
