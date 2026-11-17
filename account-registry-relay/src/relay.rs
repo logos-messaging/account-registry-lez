@@ -407,13 +407,8 @@ impl Relay {
             return Err(self.account_limit());
         }
         self.registry
-            .prepare_append(&addr, &log)
-            .map_err(|error| match error {
-                LezAccountRegError::Transport(_)
-                | LezAccountRegError::Rpc { .. }
-                | LezAccountRegError::Response(_) => unavailable(error),
-                error => Refusal::new(Reason::Rejected, error.to_string()),
-            })?;
+            .prepare_append_onto(&addr, stored.as_ref(), &log)
+            .map_err(|error| Refusal::new(Reason::Rejected, error.to_string()))?;
 
         let balance = self.registry.balance(self.payer).map_err(unavailable)?;
         self.metrics.set_balance(balance);

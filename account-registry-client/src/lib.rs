@@ -110,7 +110,7 @@ impl Registry {
         log: &SignedAccountLog,
     ) -> Result<(), LezAccountRegError> {
         let prepared = self.prepare_append(addr, log)?;
-        let _tx = self.send_append(&prepared)?;
+        self.send_append(&prepared)?;
         self.await_append(&prepared, PUBLISH_TIMEOUT)
     }
 
@@ -135,7 +135,18 @@ impl Registry {
         log: &SignedAccountLog,
     ) -> Result<PreparedAppend, LezAccountRegError> {
         let stored = self.fetch(addr)?;
-        PreparedAppend::new(self.program, addr, stored.as_ref(), log)
+        self.prepare_append_onto(addr, stored.as_ref(), log)
+    }
+
+    /// [`Registry::prepare_append`] onto `stored`, the log the caller just fetched for `addr`,
+    /// `None` if nothing is published, without fetching it again.
+    pub fn prepare_append_onto(
+        &self,
+        addr: &AccountAddr,
+        stored: Option<&SignedAccountLog>,
+        log: &SignedAccountLog,
+    ) -> Result<PreparedAppend, LezAccountRegError> {
+        PreparedAppend::new(self.program, addr, stored, log)
     }
 
     /// Waits up to `timeout` for the chain to hold the log `prepared` was made for, after the

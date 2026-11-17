@@ -1,5 +1,5 @@
-# An account relay for the public testnet, with Prometheus and a Grafana dashboard. Copy .env.example
-# to .env, set ACCOUNT_REGISTRY_PAYER, then `docker compose up -d`.
+# An account relay for a LEZ v0.4 network, with Prometheus and a Grafana dashboard. Copy .env.example
+# to .env, set the sequencer, the registry and ACCOUNT_REGISTRY_PAYER, then `docker compose up -d`.
 name: account-relay
 
 services:
@@ -9,8 +9,8 @@ services:
       dockerfile: account-registry-relay/Dockerfile
     image: account-relay:local
     environment:
-      SEQUENCER_URL: ${SEQUENCER_URL:-https://testnet.lez.logos.co}
-      ACCOUNT_REGISTRY_PROGRAM: ${ACCOUNT_REGISTRY_PROGRAM:-BHNNfnhPMNMZ7N3oAtbu1iM1HkFyraWx2UjBvxhj8wTa}
+      SEQUENCER_URL: ${SEQUENCER_URL:?set SEQUENCER_URL to a LEZ v0.4 sequencer}
+      ACCOUNT_REGISTRY_PROGRAM: ${ACCOUNT_REGISTRY_PROGRAM:?set ACCOUNT_REGISTRY_PROGRAM to the registry deployed there}
       ACCOUNT_REGISTRY_PAYER: ${ACCOUNT_REGISTRY_PAYER:-}
       ACCOUNT_RELAY_AUTH: ${ACCOUNT_RELAY_AUTH:-open}
       ACCOUNT_RELAY_TOKEN: ${ACCOUNT_RELAY_TOKEN:-}

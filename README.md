@@ -158,23 +158,23 @@ network. With `--metrics`, it serves Prometheus metrics on `/metrics`: submissio
 reason, writes, fees spent, the payer's balance, and how long writes take to land.
 
 ```sh
-# the relay's payer, funded; the registry from Deployments above
-export ACCOUNT_REGISTRY_PAYER=<key> ACCOUNT_REGISTRY_PROGRAM=<program account>
-cargo run -p account-registry-relay -- --sequencer https://testnet.lez.logos.co \
-  --p2p /ip4/0.0.0.0/tcp/9010 --metrics 127.0.0.1:9464
+# a LEZ v0.4 sequencer, the registry deployed there, and the relay's funded payer
+export SEQUENCER_URL=<url> ACCOUNT_REGISTRY_PROGRAM=<program account> ACCOUNT_REGISTRY_PAYER=<key>
+cargo run -p account-registry-relay -- --p2p /ip4/0.0.0.0/tcp/9010 --metrics 127.0.0.1:9464
 # prints its libp2p peer id; the key is kept in relay-state/node_key.hex
 
 # a client with no funds
 cargo run -p account-registry-relay --example relay_publish -- <peer id> /ip4/127.0.0.1/tcp/9010
 ```
 
-`account-registry-relay/compose.yaml` runs the relay on the public testnet, with libp2p on port
-9010 and metrics on `127.0.0.1:9464`. The image runs as an unprivileged user, keeps its ledger and
-libp2p key in a volume, and checks its own health on `/metrics`:
+`account-registry-relay/compose.yaml` runs the relay against a LEZ v0.4 sequencer; the public
+testnet runs v0.3 until it moves to v0.4, so it has no default. libp2p is on port 9010 and
+metrics on `127.0.0.1:9464`. The image runs as an unprivileged user, keeps its ledger and libp2p
+key in a volume, and checks its own health on `/metrics`:
 
 ```sh
 cd account-registry-relay
-cp .env.example .env   # set ACCOUNT_REGISTRY_PAYER
+cp .env.example .env   # set SEQUENCER_URL, ACCOUNT_REGISTRY_PROGRAM and ACCOUNT_REGISTRY_PAYER
 docker compose up -d
 docker compose logs relay | grep peer   # the peer id clients dial
 ```

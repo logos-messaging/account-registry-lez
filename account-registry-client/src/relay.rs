@@ -87,7 +87,7 @@ impl RelayRequest {
             .decode(&self.log)
             .map_err(|_| LezAccountRegError::Relay("the log is not base64".into()))?;
         let log = SignedAccountLog::from_bytes(&bytes)?;
-        log.verify(&addr).map_err(LezAccountRegError::Unverified)?;
+        log.verify(&addr)?;
         Ok((addr, log))
     }
 }
@@ -124,10 +124,7 @@ mod tests {
         let (_, log) = signed();
         let (other, _) = signed();
         let request = RelayRequest::new(&other, &log, RelayAuth::default());
-        assert!(matches!(
-            request.decode(),
-            Err(LezAccountRegError::Unverified(_))
-        ));
+        assert!(matches!(request.decode(), Err(LezAccountRegError::Log(_))));
     }
 
     #[test]
