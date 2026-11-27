@@ -10,6 +10,10 @@ on:
           - lez-testnet
           - lez-devnet
         default: lez-testnet
+      addresses_only:
+        description: Print the accounts the network's keys hold and stop; nothing is sent.
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-${{ inputs.network }}
@@ -56,7 +60,20 @@ jobs:
           key: deploy
       - name: Build the CLI and the guest
         run: cargo build --locked -p account-registry-cli
+      - name: Show the accounts the keys hold
+        env:
+          ACCOUNT_REGISTRY_PAYER: ${{ secrets.ACCOUNT_REGISTRY_PAYER }}
+          ACCOUNT_REGISTRY_PROGRAM_KEY: ${{ secrets.ACCOUNT_REGISTRY_PROGRAM_KEY }}
+        run: |
+          {
+            echo "### Accounts on ${{ inputs.network }}, as $(target/debug/account-registry --version) derives them"
+            echo
+            echo '```'
+            target/debug/account-registry address
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Check the build is for this network's LEZ version
+        if: ${{ !inputs.addresses_only }}
         run: |
           version=$(target/debug/account-registry --version)
           echo "DEPLOY_VERSION=$version" >> "$GITHUB_ENV"
@@ -65,6 +82,7 @@ jobs:
             *) echo "$version is not a build for LEZ $LEZ_MINOR" >&2; exit 1 ;;
           esac
       - name: Deploy
+        if: ${{ !inputs.addresses_only }}
         env:
           ACCOUNT_REGISTRY_PAYER: ${{ secrets.ACCOUNT_REGISTRY_PAYER }}
           ACCOUNT_REGISTRY_PROGRAM_KEY: ${{ secrets.ACCOUNT_REGISTRY_PROGRAM_KEY }}
@@ -73,6 +91,7 @@ jobs:
           program=$(sed -n 's/^Registry deployed at //p' "$RUNNER_TEMP/deployed")
           echo "ACCOUNT_REGISTRY_PROGRAM=$program" >> "$GITHUB_ENV"
       - name: Check a known account still reads back
+        if: ${{ !inputs.addresses_only }}
         run: |
           if [ -z "$SMOKE_ACCOUNT" ]; then
             echo "::warning::no known account on this network; nothing read back"
@@ -81,7 +100,7 @@ jobs:
           target/debug/account-registry fetch "$SMOKE_ACCOUNT" | tee "$RUNNER_TEMP/smoke"
           grep -q "^$SMOKE_ACCOUNT: .*signature valid" "$RUNNER_TEMP/smoke"
       - name: Summary
-        if: always()
+        if: ${{ always() && !inputs.addresses_only }}
         run: |
           {
             echo "### Registry on $SEQUENCER_URL"
