@@ -1,5 +1,7 @@
 #![cfg(test)]
 
+use std::collections::BTreeSet;
+
 use account_log::{
     ACCOUNT_LOG_DOMAIN, AccountAddr, AccountLogDraft, AccountRecord, Context, Ed25519SigningKey,
     EntryData, SignedAccountLog,
@@ -56,7 +58,7 @@ fn run(account: AccountId, stored: &[u8], update: LogUpdate) -> Vec<u8> {
     let input = ReceiveInput {
         receiver: Actor::new(account, PROGRAM),
         from: None,
-        is_authorized: false,
+        grants: BTreeSet::new(),
         pre_state: stored.to_vec().into(),
         message: borsh::to_vec(&instruction).unwrap(),
     };

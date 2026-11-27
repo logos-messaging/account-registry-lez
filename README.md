@@ -1,13 +1,13 @@
 # account-registry
 
 [![CI](https://github.com/logos-messaging/account-registry-lez/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/logos-messaging/account-registry-lez/actions/workflows/ci.yml)
-[![LEZ v0.4.0-rc3](https://img.shields.io/badge/LEZ-v0.4.0--rc3-informational.svg)](https://github.com/logos-blockchain/logos-execution-zone/releases/tag/v0.4.0-rc3)
+[![LEZ v0.4.0](https://img.shields.io/badge/LEZ-v0.4.0-informational.svg)](https://github.com/logos-blockchain/logos-execution-zone/releases/tag/v0.4.0)
 ![review policy](https://img.shields.io/badge/Review_Policy-AI_Managed-orange)
 
 A [Logos Execution Zone](https://github.com/logos-blockchain/logos-execution-zone) (LEZ) program
 that stores [λAccountLogs](https://github.com/logos-messaging/libchat) on chain. Anyone
-holding an account's address can find its log and verify it. Built for LEZ v0.4.0-rc3, the
-release candidate of the version the public testnet moves to at the end of November 2026.
+holding an account's address can find its log and verify it. Built for LEZ v0.4.0, the
+version the public testnet moves to at the end of November 2026.
 
 ## Deployments
 

@@ -14,7 +14,7 @@ dependencies = [
 
 [[package]]
 name = "account-registry-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "borsh",
  "lee_core",
@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "account-registry-guest"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "account-registry-core",
  "account-registry-program",
@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "account-registry-program"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "account-log",
  "account-registry-core",
@@ -1242,7 +1242,7 @@ dependencies = [
 [[package]]
 name = "lee_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone?tag=v0.4.0-rc3#bafd07be0701398f9bc435f73ab05e9a7936c301"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone?tag=v0.4.0#a255b42c0fc80d1cb219454a3a1f5ec3b5d92115"
 dependencies = [
  "base58",
  "borsh",

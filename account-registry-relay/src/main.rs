@@ -3,7 +3,7 @@
 
 use std::{path::PathBuf, process::ExitCode, sync::Arc, sync::mpsc, thread};
 
-use account_registry_client::{AccountId, PrivateKey, Registry, signer_id};
+use account_registry_client::{AccountId, PublicAccountSecret, Registry, signer_id};
 use account_registry_relay::{
     auth::{Auth, Open, Scheme, SharedToken},
     ledger::Ledger,
@@ -162,7 +162,7 @@ fn scheme(kind: AuthKind) -> Result<Box<dyn Scheme>, String> {
 }
 
 /// The payer's key from the environment, or the public local one against a local sequencer.
-fn payer_key(sequencer: &str) -> Result<PrivateKey, String> {
+fn payer_key(sequencer: &str) -> Result<PublicAccountSecret, String> {
     let key = match std::env::var("ACCOUNT_REGISTRY_PAYER") {
         Ok(key) if !key.is_empty() => key,
         _ if is_local(sequencer) => LOCAL_PAYER_KEY.to_owned(),
