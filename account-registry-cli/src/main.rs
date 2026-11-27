@@ -51,6 +51,12 @@ enum Command {
     /// account is what others send funds to, and the initial key is what a genesis config names.
     Keygen,
 
+    /// Print the accounts the keys in the environment hold, without contacting a sequencer.
+    ///
+    /// For each of ACCOUNT_REGISTRY_PAYER and ACCOUNT_REGISTRY_PROGRAM_KEY that is set: its
+    /// account, which for the program key is the registry's address, and its initial key.
+    Address,
+
     /// Deploy this build of the registry, or upgrade the build already at the program account.
     ///
     /// Signs with ACCOUNT_REGISTRY_PROGRAM_KEY, whose account becomes the registry's address,
@@ -90,6 +96,8 @@ enum Error {
     MissingKey(&'static str),
     #[error("{0} is not a 64-character hex key")]
     InvalidKey(&'static str),
+    #[error("set ACCOUNT_REGISTRY_PAYER or ACCOUNT_REGISTRY_PROGRAM_KEY: there is no key to show")]
+    NoKeys,
     #[error("pass --program or set ACCOUNT_REGISTRY_PROGRAM: the registry's program account")]
     MissingProgram,
     #[error(
@@ -141,6 +149,23 @@ fn run(cli: Cli) -> Result<(), Error> {
             println!("initial key: {}", initial_key(&key));
             println!("account:     {account}");
             println!("as hex:      {}", hex(account.value()));
+        }
+        Command::Address => {
+            let keys = [("payer", PAYER_VAR), ("program", PROGRAM_KEY_VAR)];
+            let mut shown = false;
+            for (role, name) in keys {
+                let key = match key_from_env(name, None) {
+                    Ok(key) => key,
+                    Err(Error::MissingKey(_)) => continue,
+                    Err(error) => return Err(error),
+                };
+                println!("{role} account:     {}", signer_id(&key));
+                println!("{role} initial key: {}", initial_key(&key));
+                shown = true;
+            }
+            if !shown {
+                return Err(Error::NoKeys);
+            }
         }
         Command::Deploy { timeout } => {
             let payer = key_from_env(PAYER_VAR, local.then_some(LOCAL_PAYER_KEY))?;

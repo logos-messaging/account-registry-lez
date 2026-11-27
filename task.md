@@ -51,7 +51,7 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 - The one example, `account_publish`, publishes a test account and never deploys.
 
 ### CLI
-- `account-registry` is the operator's tool, in its own crate so the client carries no argument parser and no guest: `keygen`, `deploy`, `fetch <addr>`, `balance [account]`.
+- `account-registry` is the operator's tool, in its own crate so the client carries no argument parser and no guest: `keygen`, `address`, `deploy`, `fetch <addr>`, `balance [account]`. `address` prints the accounts the keys in the environment hold and their initial keys, offline, so a payer can be funded before a network exists.
 - `deploy` goes through LEE's program loader: the guest's user ELF in 96 KiB segments, then a header at the program account. It creates the program, upgrades it in place if another mutable build is there, and does nothing if this build is. Deployments are mutable; the header key is the upgrade authority.
 - The loader writes only to an account that signs. Each segment account's key is derived from the header key, the image ID and the index, so only the header key's holder can write a deployment's segments, and a half-done deploy resumes.
 - The loader charges one gas per byte of loader state it reads, at most the whole chain, so `deploy` reserves the user ELF's size plus a margin. A first deploy cost 9.3M units on a local v0.4.0-rc3 sequencer, against 3.5M on v0.3.2, where the loader charged nothing for execution.

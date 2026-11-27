@@ -40,7 +40,7 @@ Clients take the registry by its program account, e.g. `ACCOUNT_REGISTRY_PROGRAM
 | `account-registry-methods` | `account-registry-lezprogram/methods` | The program compiled for the zkVM: `ACCOUNT_REGISTRY_ELF` and `ACCOUNT_REGISTRY_ID` |
 | `account-registry-guest` | `account-registry-lezprogram/methods/guest` | The zkVM entry point. Its own workspace, so its `Cargo.lock` alone decides what goes into the image |
 | `account-registry-client` | `account-registry-client` | Blocking JSON-RPC client (no async runtime) implementing libchat's `AccountProvider` and `AccountPublisher`. Does not link the guest |
-| `account-registry-cli` | `account-registry-cli` | The `account-registry` binary: `keygen`, `deploy`, `fetch`, `balance` |
+| `account-registry-cli` | `account-registry-cli` | The `account-registry` binary: `keygen`, `address`, `deploy`, `fetch`, `balance` |
 | `account-registry-relay` | `account-registry-relay` | The `account-relay` service: publishes other accounts' signed logs and pays the fee |
 
 ## Usage
@@ -102,6 +102,7 @@ source .env
 Against the testnet, once the payer's account is funded:
 
 ```sh
+account-registry address    # the accounts the two keys hold; the payer's is the one to fund
 account-registry balance    # the payer's
 account-registry deploy
 ```
@@ -126,7 +127,8 @@ the networks are `lez-testnet` (LEZ v0.3) and `lez-devnet` (LEZ v0.4). `lez-devn
 its sequencer's URL, as the secret `SEQUENCER_URL`. Each transaction gets ten minutes to land, and the run's summary
 gives the registry's address, the version deployed and the commit. A build for another LEZ
 version than the network's is refused before anything is sent, and after deploying the run reads
-one known account back. A build made in CI has its own
+one known account back. With "addresses_only" ticked the run prints the accounts the network's keys
+hold and sends nothing. A build made in CI has its own
 image ID, so the first CI run upgrades a deployment made from another machine.
 
 To publish a test account to a deployed registry, and read any account's log back:
