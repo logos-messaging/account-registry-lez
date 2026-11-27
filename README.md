@@ -11,11 +11,20 @@ version the public testnet moves to at the end of November 2026.
 
 ## Deployments
 
-| Network | Sequencer | LEZ | Registry (program account) | Deployed |
-|---|---|---|---|---|
-| Public testnet | `https://testnet.lez.logos.co` | v0.3.2 | `BHNNfnhPMNMZ7N3oAtbu1iM1HkFyraWx2UjBvxhj8wTa` | `v0.3.0` |
+| Network | LEZ | Registry (program account) | Deployed |
+|---|---|---|---|
+| Public testnet | v0.3 | `BHNNfnhPMNMZ7N3oAtbu1iM1HkFyraWx2UjBvxhj8wTa` | `v0.3.0` |
+| Public testnet | v0.4 | `CHqXMsqG3sgrwzN5Ago1e8AZSR7NKA4kpwk3dZeJPs6A` | not yet |
+| Devnet | v0.4.0-rc3 | `CwxnQYDn1Yd18VLh1ox6NrkhVHUsUMjXjtYyjYB6zKHy` | |
+| Devnet | v0.4 | `ASCtvVejTWgdNBCeNYjPMdWgryTJVjkRNREKgFiqwFLK` | not yet |
 
-Clients take the registry by its program account, e.g. `ACCOUNT_REGISTRY_PROGRAM` for the CLI.
+The public testnet's sequencer is `https://testnet.lez.logos.co`. Clients take the registry by its
+program account, e.g. `ACCOUNT_REGISTRY_PROGRAM` for the CLI.
+
+The registry's address is the account of its program key, and LEZ v0.4.0 derives an account from
+a key differently from v0.3 and v0.4.0-rc3. A network's registry therefore moves to a new address
+when the network moves to v0.4, and its logs with it: each log's account is derived from the
+registry's.
 
 ## How it works
 
