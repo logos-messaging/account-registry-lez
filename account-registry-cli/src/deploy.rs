@@ -8,10 +8,12 @@
 
 use std::time::Duration;
 
-use account_registry_client::{AccountId, Actor, PrivateKey, Registry, signer_id};
+use account_registry_client::{AccountId, Actor, PublicAccountSecret, Registry, signer_id};
 use account_registry_methods::{ACCOUNT_REGISTRY_ELF, ACCOUNT_REGISTRY_ID};
-use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramSegment};
-use program_loader_core::{Message, build_segments, segment_count};
+use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader};
+use program_loader_core::{
+    LoaderActorState as _, Message, ProgramSegment, build_segments, segment_count,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -33,7 +35,7 @@ const SEGMENT_KEY_DOMAIN: &[u8] = b"account-registry/segment-key/v1";
 /// transaction gets `timeout` to land.
 pub fn deploy(
     registry: &Registry,
-    header: &PrivateKey,
+    header: &PublicAccountSecret,
     payer: AccountId,
     timeout: Duration,
 ) -> Result<(), Error> {
@@ -128,14 +130,14 @@ fn user_elf() -> Result<Vec<u8>, Error> {
 /// stopped half way resumes.
 fn upload_segments(
     registry: &Registry,
-    header: &PrivateKey,
+    header: &PublicAccountSecret,
     user_elf: &[u8],
     gas_limit: u64,
     progress: &mut Progress,
 ) -> Result<AccountId, Error> {
-    let keys = (0..segment_count(user_elf))
+    let keys: Vec<PublicAccountSecret> = (0..segment_count(user_elf))
         .map(|index| segment_key(header, index))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect();
     let accounts: Vec<AccountId> = keys.iter().map(signer_id).collect();
     let segments =
         build_segments(user_elf, &accounts).map_err(|error| Error::Deploy(error.to_string()))?;
@@ -190,7 +192,7 @@ fn check_segment(
 
 /// The key of segment `index` of this build under `header`: derived from the header key and the
 /// image, so each build gets fresh segment accounts and a retry finds the ones it already wrote.
-fn segment_key(header: &PrivateKey, index: usize) -> Result<PrivateKey, Error> {
+fn segment_key(header: &PublicAccountSecret, index: usize) -> PublicAccountSecret {
     let mut hasher = Sha256::new();
     hasher.update(SEGMENT_KEY_DOMAIN);
     hasher.update(header.value());
@@ -202,8 +204,7 @@ fn segment_key(header: &PrivateKey, index: usize) -> Result<PrivateKey, Error> {
             .expect("an index fits in u64")
             .to_le_bytes(),
     );
-    PrivateKey::try_new(hasher.finalize().into())
-        .map_err(|_| Error::Deploy(format!("no valid key derives for segment {index}")))
+    PublicAccountSecret::new(hasher.finalize().into())
 }
 
 fn loader_actor(account: AccountId) -> Actor {
@@ -226,9 +227,9 @@ mod tests {
 
     #[test]
     fn segment_keys_differ_by_index_and_header() {
-        let header = PrivateKey::try_new([5; 32]).unwrap();
-        let other = PrivateKey::try_new([6; 32]).unwrap();
-        let key = |header, index| signer_id(&segment_key(header, index).unwrap());
+        let header = PublicAccountSecret::new([5; 32]);
+        let other = PublicAccountSecret::new([6; 32]);
+        let key = |header, index| signer_id(&segment_key(header, index));
 
         assert_eq!(key(&header, 0), key(&header, 0));
         assert_ne!(key(&header, 0), key(&header, 1));

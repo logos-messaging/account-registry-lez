@@ -70,8 +70,9 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 - Credentials are a `Scheme` per `kind`, after the RLN membership allocation service's auth vectors. A scheme may return a nullifier, sponsored once. The open and shared-token schemes are placeholders.
 
 ### Versions and program ID
-- LEZ v0.4.0-rc3, the latest release candidate of the version the public testnet moves to, pinned by tag for every LEZ crate, the guest's included, and one logos-chat revision. Bump each set together.
-- The local sequencer (`./run-local-sequencer`) is built from the commit `Cargo.lock` resolves the LEZ tag to, never from a separate clone. Its genesis funds `LOCAL_PAYER_KEY`'s account, named there by its public key, since no program can mint native balance once the chain runs.
+- LEZ v0.4.0, the version the public testnet moves to, pinned by tag for every LEZ crate, the guest's included, and one logos-chat revision. Bump each set together.
+- The local sequencer (`./run-local-sequencer`) is built from the commit `Cargo.lock` resolves the LEZ tag to, never from a separate clone. Its genesis funds `LOCAL_PAYER_KEY`'s account, named there by its initial key, since no program can mint native balance once the chain runs.
+- A payer or program key is a LEZ public account secret: each nonce has its own Schnorr key derived from it, and the account ID commits to the nonce-0 key. The same 32 bytes named another account on v0.4.0-rc3, so a key funded or deployed under there holds nothing on v0.4.0.
 - The program ID is the header account the deployer chooses, and logs live at PDAs derived from it, so redeploying a new build under the same header keeps every log. The guest is its own workspace, so its `Cargo.lock` alone decides the image ID the header records.
 
 ### Releases
@@ -89,7 +90,7 @@ The log format, its verification and the `AccountProvider` / `AccountPublisher` 
 
 ### Project setup
 - Crates `account-registry-core` (wire types), `-program` (state transition), `-methods` (embedded guest), `-guest` (zkVM entry point), `-client`, `-cli`.
-- Rust edition 2024, toolchain pinned to upstream LEZ's (1.98.1 for v0.4.0-rc3), MIT/Apache-2.0 dual licence.
+- Rust edition 2024, toolchain pinned to upstream LEZ's (1.98.1 for v0.4.0), MIT/Apache-2.0 dual licence.
 - Dependencies: `account-log`, `account`, `lee`, `lee_core`, `program_loader_core`, `risc0-zkvm`, `risc0-build`, `risc0-binfmt`, `risc0-zkos-v1compat`, `borsh`, `clap`, `sha2`, `ureq`, `url`, `serde`, `serde_json`, `base64`, `thiserror`.
 
 

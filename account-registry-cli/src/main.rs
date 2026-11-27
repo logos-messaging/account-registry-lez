@@ -10,7 +10,8 @@ use std::{process::ExitCode, time::Duration};
 
 use account_log::{AccountAddr, AccountEntry, AccountLogDraft, EntryData, IndexedAccountEntry};
 use account_registry_client::{
-    AccountId, LezAccountRegError, PROGRAM_VERSION, PrivateKey, PublicKey, Registry, signer_id,
+    AccountId, LezAccountRegError, PROGRAM_VERSION, PublicAccountSecret, Registry, initial_key,
+    signer_id,
 };
 use clap::{Parser, Subcommand};
 
@@ -47,7 +48,7 @@ enum Command {
     /// Print a new LEE key and the public account it signs for.
     ///
     /// Use one as a fee payer and another as the program account. The key is the secret; the
-    /// account is what others send funds to, and the public key is what a genesis config names.
+    /// account is what others send funds to, and the initial key is what a genesis config names.
     Keygen,
 
     /// Deploy this build of the registry, or upgrade the build already at the program account.
@@ -134,12 +135,12 @@ fn run(cli: Cli) -> Result<(), Error> {
     let local = is_local(&url);
     match cli.command {
         Command::Keygen => {
-            let key = PrivateKey::new_os_random();
+            let key = PublicAccountSecret::new_os_random();
             let account = signer_id(&key);
-            println!("key:        {key}");
-            println!("public key: {}", PublicKey::new_from_private_key(&key));
-            println!("account:    {account}");
-            println!("as hex:     {}", hex(account.value()));
+            println!("key:         {key}");
+            println!("initial key: {}", initial_key(&key));
+            println!("account:     {account}");
+            println!("as hex:      {}", hex(account.value()));
         }
         Command::Deploy { timeout } => {
             let payer = key_from_env(PAYER_VAR, local.then_some(LOCAL_PAYER_KEY))?;
@@ -215,7 +216,7 @@ fn print_log(addr: &AccountAddr, stored: &account_log::SignedAccountLog) -> Resu
 
 /// The key in the variable `name`, or `default` if it is unset or empty, as in a `.env` not yet
 /// filled in. With no default, it is required.
-fn key_from_env(name: &'static str, default: Option<&str>) -> Result<PrivateKey, Error> {
+fn key_from_env(name: &'static str, default: Option<&str>) -> Result<PublicAccountSecret, Error> {
     let set = std::env::var(name).ok().filter(|key| !key.is_empty());
     match (set, default) {
         (Some(key), _) => parse_key(name, &key),
@@ -224,7 +225,7 @@ fn key_from_env(name: &'static str, default: Option<&str>) -> Result<PrivateKey,
     }
 }
 
-fn parse_key(name: &'static str, key: &str) -> Result<PrivateKey, Error> {
+fn parse_key(name: &'static str, key: &str) -> Result<PublicAccountSecret, Error> {
     key.parse().map_err(|_| Error::InvalidKey(name))
 }
 
@@ -244,15 +245,14 @@ mod tests {
 
     use super::*;
 
-    /// `LOCAL_PAYER_KEY`'s public key, as `./run-local-sequencer` names it in the genesis config.
-    const LOCAL_PAYER_PUBLIC_KEY: &str =
-        "4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa";
+    /// `LOCAL_PAYER_KEY`'s initial key, as `./run-local-sequencer` names it in the genesis config.
+    const LOCAL_PAYER_INITIAL_KEY: &str =
+        "0089a4b1af9c4d9874f7136c880098607a07f390861683c2090337cdeb971bfc2b";
 
     #[test]
-    fn the_local_payer_public_key_matches_its_key() {
-        let key: PrivateKey = LOCAL_PAYER_KEY.parse().unwrap();
-        let public = PublicKey::new_from_private_key(&key);
-        assert_eq!(LOCAL_PAYER_PUBLIC_KEY, public.to_string());
+    fn the_local_payer_initial_key_matches_its_key() {
+        let key: PublicAccountSecret = LOCAL_PAYER_KEY.parse().unwrap();
+        assert_eq!(LOCAL_PAYER_INITIAL_KEY, initial_key(&key).to_string());
     }
 
     #[test]
@@ -273,7 +273,7 @@ mod tests {
         let url = std::env::var("SEQUENCER_URL").unwrap_or("http://localhost:3040".into());
         let payer = key_from_env(PAYER_VAR, Some(LOCAL_PAYER_KEY)).unwrap();
         let payer_id = signer_id(&payer);
-        let header = PrivateKey::new_os_random();
+        let header = PublicAccountSecret::new_os_random();
         let registry = Registry::connect(&url, signer_id(&header))
             .unwrap()
             .with_payer(payer);

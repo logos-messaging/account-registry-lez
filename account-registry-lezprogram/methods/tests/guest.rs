@@ -11,7 +11,8 @@ use account_registry_core::{
 };
 use account_registry_methods::{ACCOUNT_REGISTRY_ELF, ACCOUNT_REGISTRY_ID};
 use lee::{
-    AccountId, Actor, PublicAccountEvidence, PublicTransaction, V03State, ValidatedStateDiff,
+    AccountId, Actor, Authority, GenesisBuilder, PublicAccountEvidence, PublicTransaction,
+    V03State, ValidatedStateDiff,
     program::Program,
     public_transaction::{Message, WitnessSet},
 };
@@ -25,7 +26,9 @@ fn program() -> Program {
 }
 
 fn state() -> V03State {
-    V03State::new().with_named_programs([(PROGRAM, program())])
+    GenesisBuilder::new()
+        .with_programs_at([(PROGRAM, program(), false)])
+        .build()
 }
 
 struct Owner(Ed25519SigningKey);
@@ -65,8 +68,16 @@ fn append_tx(update: LogUpdate) -> PublicTransaction {
         seed: PdaSeed::new(update.addr),
     };
     let instruction = borsh::to_vec(&Instruction::Append(update)).unwrap();
-    let message = Message::new(to, instruction, [to], BTreeMap::new(), None, vec![evidence]);
-    let witnesses = WitnessSet::for_message(&message, &[]);
+    let actors = [(to, Authority::None)];
+    let message = Message::new(
+        to,
+        instruction,
+        actors,
+        BTreeMap::new(),
+        None,
+        vec![evidence],
+    );
+    let witnesses = WitnessSet::sign(&message, &[]);
     PublicTransaction::new(message, witnesses)
 }
 

@@ -18,7 +18,7 @@ use account_log::{
 };
 use logos_account::{Account, ChatRead, ChatWrite, ProfileRead, ProfileWrite};
 
-use account_registry_client::{AccountId, PrivateKey, Registry, signer_id};
+use account_registry_client::{AccountId, PublicAccountSecret, Registry, signer_id};
 
 /// The payer `./run-local-sequencer` funds at genesis, and the key the CLI deploys under there.
 const LOCAL_PAYER_KEY: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -117,7 +117,7 @@ fn pretty_print(slog: &SignedAccountLog, addr: &AccountAddr) {
 }
 
 /// The key in `name`, or `default` if it is unset. With no default, the key is required.
-fn key_from_env(name: &str, default: Option<&str>) -> PrivateKey {
+fn key_from_env(name: &str, default: Option<&str>) -> PublicAccountSecret {
     let key = std::env::var(name)
         .ok()
         .or(default.map(str::to_owned))

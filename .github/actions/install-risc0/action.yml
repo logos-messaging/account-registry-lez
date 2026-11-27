@@ -3,7 +3,7 @@ description: Installs the RISC Zero toolchain, with r0vm matching the risc0-zkvm
 inputs:
   version:
     description: r0vm and cargo-risczero version; must share major.minor with risc0-zkvm in Cargo.lock.
-    default: "3.0.5"
+    default: "3.1.0"
 runs:
   using: composite
   steps:

@@ -24,15 +24,19 @@ use account_registry_core::{Instruction, LogUpdate};
 pub use account_registry_core::{MAX_LOG_PAYLOAD_BYTES, PROGRAM_VERSION, append_gas_limit};
 use borsh::BorshSerialize;
 use lee::{
-    FeeDeclaration, PublicTransaction,
+    Authority, FeeDeclaration, PublicTransaction,
     public_transaction::{Message, WitnessSet},
+    signature::{INITIAL_KEY_TYPE, Signer, public_account_id},
 };
 use logos_account::{AccountProvider, AccountPublisher};
 
 use rpc::{LeeTransaction, Sequencer};
 
 pub use error::LezAccountRegError;
-pub use lee::{Account, AccountId, Actor, PrivateKey, PublicAccountEvidence, PublicKey};
+pub use lee::{
+    Account, AccountId, Actor, PublicAccountEvidence,
+    signature::{PublicAccountSecret, initial_key},
+};
 
 mod error;
 pub mod relay;
@@ -55,7 +59,7 @@ const ASSUMED_DATA_BYTES: u128 = 100_000;
 pub struct Registry {
     rpc: Sequencer,
     program: AccountId,
-    payer: Option<PrivateKey>,
+    payer: Option<PublicAccountSecret>,
 }
 
 impl Registry {
@@ -72,7 +76,7 @@ impl Registry {
 
     /// Pays the fees of every write with `payer`, a funded LEE public account.
     #[must_use]
-    pub fn with_payer(mut self, payer: PrivateKey) -> Self {
+    pub fn with_payer(mut self, payer: PublicAccountSecret) -> Self {
         self.payer = Some(payer);
         self
     }
@@ -186,13 +190,14 @@ impl Registry {
     }
 
     /// Sends `message` to the actor `to`, signed by `signers` and paid by the configured payer,
-    /// each at its current nonce, reserving `gas_limit` execution gas. `evidence` must derive
-    /// `to`'s account if it does not exist yet and none of the signers is its key. Returns the
+    /// each with its key at its current nonce, reserving `gas_limit` execution gas. `to` is
+    /// authorized only if its own account is one of the signers. `evidence` must derive `to`'s
+    /// account if it does not exist yet and none of the signers holds it. Returns the
     /// transaction's hash once the sequencer accepts it, not once it is in a block.
     pub fn send(
         &self,
         to: Actor,
-        signers: &[&PrivateKey],
+        signers: &[&PublicAccountSecret],
         evidence: Vec<PublicAccountEvidence>,
         message: impl BorshSerialize,
         gas_limit: u64,
@@ -217,8 +222,20 @@ impl Registry {
             (u128::from(gas_limit) + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE,
         );
         let message = borsh::to_vec(&message).expect("borsh encoding into a Vec cannot fail");
-        let message = Message::new(to, message, [to], nonces, Some(fee), evidence);
-        let witnesses = WitnessSet::for_message(&message, &keys);
+        let authority = if nonces.contains_key(&to.account_id) {
+            Authority::Signer
+        } else {
+            Authority::None
+        };
+        let witnesses: Vec<Signer> = keys
+            .iter()
+            .map(|key| {
+                let nonce = nonces[&signer_id(key)];
+                Signer::new(key, nonce, INITIAL_KEY_TYPE, INITIAL_KEY_TYPE)
+            })
+            .collect();
+        let message = Message::new(to, message, [(to, authority)], nonces, Some(fee), evidence);
+        let witnesses = WitnessSet::sign(&message, &witnesses);
         let tx = PublicTransaction::new(message, witnesses);
         self.rpc.send_transaction(&LeeTransaction::Public(tx))
     }
@@ -323,10 +340,10 @@ pub fn sign(
     Ok(SignedAccountLog { payload, signature })
 }
 
-/// The LEE public account `key` signs for.
+/// The LEE public account `secret` holds.
 #[must_use]
-pub fn signer_id(key: &PrivateKey) -> AccountId {
-    AccountId::from(&PublicKey::new_from_private_key(key))
+pub fn signer_id(secret: &PublicAccountSecret) -> AccountId {
+    public_account_id(secret)
 }
 
 /// Decodes the data of `addr`'s log account and checks that `addr` signed it. `None` if nothing
@@ -520,9 +537,10 @@ mod tests {
 
         let fee = FeeDeclaration::new(PROGRAM, prepared.gas_limit, 0, 1);
         let to = prepared.actor();
-        assert_eq!(prepared.evidence().account_id(), prepared.account);
+        assert_eq!(prepared.evidence().account_id(), Some(prepared.account));
+        let actors = [(to, Authority::None)];
         let message =
-            Message::try_new_with_fees(to, [to], BTreeMap::new(), &prepared.instruction, fee)
+            Message::try_new_with_fees(to, actors, BTreeMap::new(), &prepared.instruction, fee)
                 .unwrap();
         assert_eq!(message.execution.root.message, prepared.instruction_data());
     }
@@ -577,12 +595,12 @@ mod tests {
             new_signature: log.signature.to_bytes(),
             entries: log.payload.as_bytes()[ACCOUNT_LOG_DOMAIN.len()..].to_vec(),
         };
-        let payer = PrivateKey::try_new([3; 32]).unwrap();
+        let payer = PublicAccountSecret::new([3; 32]);
         let registry = registry().with_payer(payer.clone());
         let to = Actor::new(registry.account_id(&addr), PROGRAM);
         let message = Message::try_new_with_fees(
             to,
-            [to],
+            [(to, Authority::None)],
             BTreeMap::from([(signer_id(&payer), 0_u128.into())]),
             Instruction::Append(update),
             FeeDeclaration::new(
@@ -595,7 +613,15 @@ mod tests {
         .unwrap();
         let public = PublicTransaction::new(
             message.clone(),
-            WitnessSet::for_message(&message, &[&payer]),
+            WitnessSet::sign(
+                &message,
+                &[Signer::new(
+                    &payer,
+                    0_u128.into(),
+                    INITIAL_KEY_TYPE,
+                    INITIAL_KEY_TYPE,
+                )],
+            ),
         );
 
         assert_eq!(

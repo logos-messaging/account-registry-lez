@@ -18,9 +18,9 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cargo_home=${CARGO_HOME:-$HOME/.cargo}
 
-# Must match `LOCAL_PAYER_PUBLIC_KEY` in account-registry-cli/src/main.rs: genesis names a funded
-# account by its public key.
-local_payer_key=4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa
+# Must match `LOCAL_PAYER_INITIAL_KEY` in account-registry-cli/src/main.rs: genesis names a funded
+# account by its initial key.
+local_payer_key=0089a4b1af9c4d9874f7136c880098607a07f390861683c2090337cdeb971bfc2b
 
 # A key the mocked Bedrock node needs named, as upstream's Justfile does; it holds nothing here.
 bedrock_funding_key=2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26

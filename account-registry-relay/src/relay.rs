@@ -516,7 +516,7 @@ mod tests {
 
     use account_log::{AccountLogDraft, Context, Ed25519SigningKey, EntryData};
     use account_registry_client::{
-        PrivateKey,
+        PublicAccountSecret,
         relay::{RelayAuth, RelayRequest},
         sign,
     };
@@ -543,7 +543,7 @@ mod tests {
             .expect("ACCOUNT_REGISTRY_PROGRAM")
             .parse()
             .unwrap();
-        let payer: PrivateKey = LOCAL_PAYER_KEY.parse().unwrap();
+        let payer: PublicAccountSecret = LOCAL_PAYER_KEY.parse().unwrap();
         let payer_id = account_registry_client::signer_id(&payer);
         let registry = Registry::connect(&url, program).unwrap().with_payer(payer);
         let metrics = Arc::new(Metrics::new(Vec::new()));
